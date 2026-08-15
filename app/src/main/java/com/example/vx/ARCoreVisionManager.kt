@@ -25,6 +25,7 @@ class ARCoreVisionManager(private val context: Context) {
     private var pendingGeometry: Triple<Int, Int, Int>? = null
     private val isProcessing = AtomicBoolean(false)
     private var lastProcessTimeNs = 0L
+    private var lastFrameTimestampNs = 0L
     @Volatile private var processIntervalNs = 100_000_000L // default 10 Hz maximum CPU/depth work
 
     @Synchronized
@@ -75,6 +76,7 @@ class ARCoreVisionManager(private val context: Context) {
             isResumed = false
         }
         isProcessing.set(false)
+        lastFrameTimestampNs = 0L
     }
 
     fun currentSession(): Session? = session?.takeIf { isResumed }
@@ -100,23 +102,34 @@ class ARCoreVisionManager(private val context: Context) {
      */
     fun onFrame(frame: Frame, callback: (Image, Image?) -> Unit) {
         if (!isResumed || frame.camera.trackingState != TrackingState.TRACKING) return
+        val frameTimestampNs = frame.timestamp
+        if (frameTimestampNs <= 0L || frameTimestampNs <= lastFrameTimestampNs) return
         val nowNs = System.nanoTime()
         if (isProcessing.get() || nowNs - lastProcessTimeNs < processIntervalNs) return
 
+        var cameraImage: Image? = null
+        var depthImage: Image? = null
         try {
-            val cameraImage = frame.acquireCameraImage()
-            val depthImage = try {
+            cameraImage = frame.acquireCameraImage()
+            depthImage = try {
                 frame.acquireDepthImage16Bits()
             } catch (_: NotYetAvailableException) {
                 null
             }
             isProcessing.set(true)
             lastProcessTimeNs = nowNs
+            lastFrameTimestampNs = frameTimestampNs
             callback(cameraImage, depthImage)
+            cameraImage = null
+            depthImage = null
         } catch (_: NotYetAvailableException) {
             // Camera image is not ready yet; do not treat this as free space.
         } catch (error: Exception) {
             Log.e("ARCoreVision", "Frame acquisition failed", error)
+        } finally {
+            cameraImage?.close()
+            depthImage?.close()
+            if (cameraImage != null || depthImage != null) isProcessing.set(false)
         }
     }
 
@@ -132,5 +145,6 @@ class ARCoreVisionManager(private val context: Context) {
         isResumed = false
         pendingTextureName = null
         pendingGeometry = null
+        lastFrameTimestampNs = 0L
     }
 }

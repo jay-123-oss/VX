@@ -15,3 +15,11 @@ Key points used in the design: thermal headroom/status is device-dependent; work
 [4] ONNX Runtime NNAPI Execution Provider: https://onnxruntime.ai/docs/execution-providers/NNAPI-ExecutionProvider.html
 
 Key points used in the design: NNAPI provides an interface to CPU, GPU, and neural accelerators on Android, but operator support and device execution are model-specific; CPU fallback and benchmark validation are required.
+
+[5] Android NNAPI Migration Guide: https://developer.android.com/ndk/guides/neuralnetworks/migration-guide
+
+Key point used in the implementation: Android documents NNAPI as deprecated in Android 15, so this project treats NNAPI as an optional benchmark/provider path with CPU fallback rather than a permanent production guarantee.
+
+[6] Android Thermal API: https://developer.android.com/games/optimize/adpf/thermal
+
+Key points used in the implementation: `PowerManager.getThermalHeadroom()` supports proactive workload control, should not be called more than once every 10 seconds, and should be interpreted together with thermal status because device mappings vary.

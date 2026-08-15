@@ -15,6 +15,11 @@
 - ARCore horizontal upward-facing plane tracking now supplies a ground reference to negative-obstacle analysis. Vibration amplitude, TTS throttling, and stereo beep feedback were optimized.
 - Audio alerts now use three preloaded short SoundPool clips with left/right gain panning instead of generating and streaming a fresh PCM buffer for every alert. The previous AudioTrack underrun path is removed.
 - Depth safety now uses one shared per-frame depth sampler and reusable ground-profile arrays. Thermal policy is cached, plane checks are throttled, and motion switching uses hysteresis with a 450 ms moving confirmation and 1.5 s still confirmation. Target FPS changes are applied only when the mode changes.
+- ARCore rendering now uses `RENDERMODE_WHEN_DIRTY` with a rate-limited main-thread render request, while perception work runs on one low-priority bounded executor. Duplicate/stale ARCore timestamps are rejected, and image ownership is closed safely on both accepted and rejected handoffs.
+- Depth values at the far saturation threshold (7,800 mm and above) are not treated as reliable clear space. The Hindi depth reason is logged, and the safety engine receives unknown depth so it remains CAUTION rather than green.
+- The detector keeps a CPU baseline and exposes optional NNAPI with `CPU_DISABLED`; failed or unsupported NNAPI setup falls back to CPU. A developer-only provider benchmark API and usage guide are included. NNAPI is not required for safety and is treated as optional because Android 15 deprecates it.
+- Thermal policy now combines thermal status with `getThermalHeadroom(10)` sampled at the documented 10-second cadence. A light thermal tier reduces optional workloads before severe throttling while preserving the Reflex Shield loop.
+- Unit tests now cover saturated far depth as unreliable and mixed valid/saturated samples as usable when a nearby reliable surface exists. The debug APK was rebuilt successfully after these changes.
 
 ## Deliberate boundaries in this milestone
 

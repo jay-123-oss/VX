@@ -5,13 +5,15 @@ import android.content.pm.PackageManager
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import com.google.ar.core.TrackingState
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.lifecycleScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -38,7 +40,20 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var previousDistanceTimeNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
     private var cameraPipelineStarted = false
+    @Volatile private var renderLoopRunning = false
+    @Volatile private var renderPeriodMs = 33L
+    private val renderHandler = Handler(Looper.getMainLooper())
+    private val renderRunnable = object : Runnable {
+        override fun run() {
+            if (!renderLoopRunning) return
+            surface.requestRender()
+            renderHandler.postDelayed(this, renderPeriodMs)
+        }
+    }
     @Volatile private var searchRequested = false
+    private val perceptionExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "vx-perception").apply { priority = Thread.NORM_PRIORITY - 1 }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -79,7 +94,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         surface.setEGLContextClientVersion(2)
         surface.setRenderer(this)
-        surface.renderMode = GLSurfaceView.RENDERMODE_CONTINUOUSLY
+        // Drive ARCore at the current workload rate instead of rendering continuously at display FPS.
+        surface.renderMode = GLSurfaceView.RENDERMODE_WHEN_DIRTY
 
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
@@ -102,8 +118,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         val targetFps = minOf(motionFps, thermalPolicy.cameraFps)
         if (targetFps != lastAppliedFps) {
             arManager.setTargetFps(targetFps)
+            renderPeriodMs = (1_000L / targetFps.coerceAtLeast(1)).coerceAtLeast(16L)
             lastAppliedFps = targetFps
-            Log.i("WorkloadPolicy", "Applied camera FPS=$targetFps motion=${motionManager.currentState()} thermal=${thermalPolicy.cameraFps}")
+            Log.i("WorkloadPolicy", "Applied camera FPS=$targetFps periodMs=$renderPeriodMs motion=${motionManager.currentState()} thermal=${thermalPolicy.cameraFps}")
         }
 
         if (frame.camera.trackingState != TrackingState.TRACKING) {
@@ -124,16 +141,18 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
 
         arManager.onFrame(frame) { camImage, depthImage ->
-            lifecycleScope.launch(Dispatchers.Default) {
-                try {
+            try {
+                perceptionExecutor.execute {
+                    try {
                     // Safety remains independent from YOLO and VLM. Unknown depth is caution,
                     // never a simulated clear path.
                     val normX = 0.5f
                     val depthSampler = depthImage?.let { DepthFusionMath.Sampler(it) }
                     val corridorResult = depthSampler?.let { corridorAnalyzer.analyze(it) }
-                    val distanceMm = corridorResult?.nearestDepthMm ?: 0
-                    val distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f)
+                    val rawNearestDepthMm = corridorResult?.nearestDepthMm ?: 0
                     val hasReliableDepth = corridorResult?.reliable == true
+                    val distanceMm = rawNearestDepthMm.takeIf { hasReliableDepth } ?: 0
+                    val distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f)
                     val nowNs = System.nanoTime()
                     val deltaSeconds = if (previousDistanceTimeNs > 0L) {
                         (nowNs - previousDistanceTimeNs) / 1_000_000_000f
@@ -206,7 +225,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
-                            "tracking=${hasReliableDepth} depthMm=$distanceMm drop=$dropDetected unknownGround=$unknownGround plane=${planeAssessment.horizontalGroundTracked} planes=${planeAssessment.trackedPlaneCount} motion=${motionManager.currentState()} fps=$targetFps"
+                            "tracking=${hasReliableDepth} rawDepthMm=$rawNearestDepthMm depthMm=$distanceMm depthReason=${corridorResult?.unknownReason} drop=$dropDetected unknownGround=$unknownGround plane=${planeAssessment.horizontalGroundTracked} planes=${planeAssessment.trackedPlaneCount} motion=${motionManager.currentState()} fps=$targetFps"
                         )
                         lastSafetyLogNs = nowNs
                     }
@@ -215,7 +234,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     camImage.close()
                     depthImage?.close()
                     arManager.doneProcessing()
+                    }
                 }
+            } catch (_: RejectedExecutionException) {
+                camImage.close()
+                depthImage?.close()
+                arManager.doneProcessing()
             }
         }
     }
@@ -268,11 +292,16 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         motionManager.start()
         thermalDutyManager.start()
         arManager.resume()
+        renderLoopRunning = true
+        renderHandler.removeCallbacks(renderRunnable)
+        renderHandler.post(renderRunnable)
     }
 
     override fun onPause() {
         super.onPause()
         cameraPipelineStarted = false
+        renderLoopRunning = false
+        renderHandler.removeCallbacks(renderRunnable)
         surface.onPause()
         motionManager.stop()
         thermalDutyManager.stop()
@@ -290,6 +319,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onDestroy() {
         super.onDestroy()
+        renderLoopRunning = false
+        renderHandler.removeCallbacks(renderRunnable)
+        perceptionExecutor.shutdownNow()
         arManager.shutdown()
         objectDetector.close()
         alerts.release()

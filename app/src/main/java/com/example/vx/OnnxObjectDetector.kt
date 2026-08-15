@@ -5,18 +5,35 @@ import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import ai.onnxruntime.extensions.OrtxPackage
+import ai.onnxruntime.providers.NNAPIFlags
 import android.content.Context
 import android.graphics.BitmapFactory
+import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import java.nio.ByteBuffer
 import java.util.Collections
+import java.util.EnumSet
 
 /**
- * Offline YOLOv8 detector backed by the official ONNX Runtime pre/post-processing model.
- * The model is loaded lazily so app startup remains safe on devices without enough memory.
- * This model uses a fixed COCO vocabulary; open-vocabulary prompts require a YOLO-World export.
+ * Offline YOLOv8 detector with CPU baseline and optional strict NNAPI/NPU acceleration.
+ * NNAPI is accepted only if a session can be created with CPU fallback disabled; otherwise the
+ * detector falls back to ORT CPU kernels so unsupported operators cannot silently change the path.
  */
-class OnnxObjectDetector(private val context: Context) : AutoCloseable {
+class OnnxObjectDetector(
+    private val context: Context,
+    private val preferHardware: Boolean = true
+) : AutoCloseable {
+    enum class Provider { CPU, NNAPI }
+
+    data class ProviderBenchmark(
+        val provider: Provider,
+        val available: Boolean,
+        val averageMs: Double,
+        val failedRuns: Int,
+        val message: String
+    )
+
     data class Detection(
         val label: String,
         val classId: Int,
@@ -36,11 +53,12 @@ class OnnxObjectDetector(private val context: Context) : AutoCloseable {
     private var env: OrtEnvironment? = null
     private var session: OrtSession? = null
     private var labels: List<String> = emptyList()
+    @Volatile private var activeProvider: Provider = Provider.CPU
     @Volatile private var closed = false
 
-    fun isAvailable(): Boolean = synchronized(lock) {
-        ensureSessionLocked() != null
-    }
+    fun isAvailable(): Boolean = synchronized(lock) { ensureSessionLocked() != null }
+
+    fun providerName(): String = activeProvider.name
 
     /**
      * Runs only when explicitly requested by the user. The input is a JPEG/PNG byte array from
@@ -56,33 +74,83 @@ class OnnxObjectDetector(private val context: Context) : AutoCloseable {
             activeSession = ready
         }
 
+        val startNs = SystemClock.elapsedRealtimeNanos()
         return runCatching {
-            val input = OnnxTensor.createTensor(
-                activeEnv,
-                ByteBuffer.wrap(imageBytes),
-                longArrayOf(imageBytes.size.toLong()),
-                OnnxJavaType.UINT8
-            )
-            input.use {
-                activeSession.run(
-                    Collections.singletonMap("image", input),
-                    setOf("scaled_box_out_next")
-                ).use { result ->
-                    val raw = result.get(0).value
-                    @Suppress("UNCHECKED_CAST")
-                    val rows = raw as? Array<FloatArray> ?: return@use emptyList()
-                    val dimensions = BitmapFactory.Options().also { it.inJustDecodeBounds = true }
-                    BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, dimensions)
-                    val imageWidth = dimensions.outWidth.coerceAtLeast(1).toFloat()
-                    val imageHeight = dimensions.outHeight.coerceAtLeast(1).toFloat()
-                    rows.mapNotNull { row -> parseRow(row, imageWidth, imageHeight, requestedLabelHindi) }
-                        .sortedByDescending { it.confidence }
-                        .take(MAX_RESULTS)
+            val rows = runForRows(activeEnv, activeSession, imageBytes)
+            val dimensions = BitmapFactory.Options().also { it.inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, dimensions)
+            val imageWidth = dimensions.outWidth.coerceAtLeast(1).toFloat()
+            val imageHeight = dimensions.outHeight.coerceAtLeast(1).toFloat()
+            rows.mapNotNull { row -> parseRow(row, imageWidth, imageHeight, requestedLabelHindi) }
+                .sortedByDescending { it.confidence }
+                .take(MAX_RESULTS)
+        }.onFailure { error ->
+            Log.e(TAG, "Offline ONNX inference failed provider=${activeProvider.name}", error)
+        }.also {
+            val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+            Log.i(TAG, "Inference provider=${activeProvider.name} latencyMs=${"%.1f".format(elapsedMs)}")
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Explicit developer benchmark. Run this off the main thread with the same camera image for
+     * CPU and NNAPI. It does not change the active session or the app's safety loop.
+     */
+    fun benchmarkProviders(imageBytes: ByteArray, runs: Int = 3): List<ProviderBenchmark> {
+        if (imageBytes.isEmpty() || closed) return emptyList()
+        val runtime = synchronized(lock) { env ?: OrtEnvironment.getEnvironment().also { env = it } }
+        return Provider.values().map { provider ->
+            val startNs = SystemClock.elapsedRealtimeNanos()
+            var failed = 0
+            var completed = 0
+            val temporarySession = runCatching { createSession(runtime, provider) }.getOrElse { error ->
+                return@map ProviderBenchmark(provider, false, 0.0, 1, error.message ?: "provider unavailable")
+            }
+            temporarySession.use { candidate ->
+                repeat(runs.coerceIn(1, 5)) {
+                    runCatching { runForRows(runtime, candidate, imageBytes) }
+                        .onSuccess { completed++ }
+                        .onFailure { failed++ }
                 }
             }
-        }.onFailure { error ->
-            Log.e(TAG, "Offline ONNX inference failed", error)
-        }.getOrDefault(emptyList())
+            val average = if (completed == 0) 0.0 else {
+                val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startNs) / 1_000_000.0
+                elapsedMs / completed
+            }
+            ProviderBenchmark(
+                provider = provider,
+                available = completed > 0,
+                averageMs = average,
+                failedRuns = failed,
+                message = if (completed > 0) "benchmark complete" else "all runs failed"
+            )
+        }.also { results ->
+            results.forEach { result ->
+                Log.i(TAG, "Benchmark provider=${result.provider} available=${result.available} avgMs=${result.averageMs} failed=${result.failedRuns}")
+            }
+        }
+    }
+
+    private fun runForRows(
+        runtime: OrtEnvironment,
+        activeSession: OrtSession,
+        imageBytes: ByteArray
+    ): Array<FloatArray> {
+        val input = OnnxTensor.createTensor(
+            runtime,
+            ByteBuffer.wrap(imageBytes),
+            longArrayOf(imageBytes.size.toLong()),
+            OnnxJavaType.UINT8
+        )
+        input.use {
+            activeSession.run(
+                Collections.singletonMap("image", input),
+                setOf("scaled_box_out_next")
+            ).use { result ->
+                @Suppress("UNCHECKED_CAST")
+                return result.get(0).value as? Array<FloatArray> ?: emptyArray()
+            }
+        }
     }
 
     private fun parseRow(
@@ -123,18 +191,42 @@ class OnnxObjectDetector(private val context: Context) : AutoCloseable {
     private fun ensureSessionLocked(): OrtSession? {
         if (closed) return null
         if (session != null) return session
-        return runCatching {
-            val runtime = OrtEnvironment.getEnvironment()
-            val options = OrtSession.SessionOptions()
-            options.registerCustomOpLibrary(OrtxPackage.getLibraryPath())
-            options.setIntraOpNumThreads(2)
-            val model = context.assets.open(MODEL_ASSET).use { it.readBytes() }
-            labels = context.assets.open(LABEL_ASSET).bufferedReader().use { it.readLines() }
-            env = runtime
-            runtime.createSession(model, options).also { session = it }
-        }.onFailure { error ->
-            Log.e(TAG, "Offline ONNX model unavailable", error)
-        }.getOrNull()
+        val runtime = env ?: OrtEnvironment.getEnvironment().also { env = it }
+        labels = runCatching {
+            context.assets.open(LABEL_ASSET).bufferedReader().use { it.readLines() }
+        }.getOrDefault(emptyList())
+        if (preferHardware && Build.VERSION.SDK_INT >= 29) {
+            runCatching { createSession(runtime, Provider.NNAPI) }
+                .onSuccess {
+                    activeProvider = Provider.NNAPI
+                    session = it
+                    Log.i(TAG, "NNAPI/NPU provider selected with CPU fallback disabled")
+                }
+                .onFailure { error ->
+                    Log.w(TAG, "NNAPI unavailable; using CPU baseline: ${error.message}")
+                }
+            if (session != null) return session
+        }
+        return runCatching { createSession(runtime, Provider.CPU) }
+            .onSuccess {
+                activeProvider = Provider.CPU
+                session = it
+                Log.i(TAG, "CPU provider selected")
+            }
+            .onFailure { error -> Log.e(TAG, "Offline ONNX model unavailable", error) }
+            .getOrNull()
+    }
+
+    private fun createSession(runtime: OrtEnvironment, provider: Provider): OrtSession {
+        val options = OrtSession.SessionOptions()
+        options.registerCustomOpLibrary(OrtxPackage.getLibraryPath())
+        options.setIntraOpNumThreads(2)
+        options.setInterOpNumThreads(1)
+        if (provider == Provider.NNAPI) {
+            options.addNnapi(EnumSet.of(NNAPIFlags.CPU_DISABLED))
+        }
+        val model = context.assets.open(MODEL_ASSET).use { it.readBytes() }
+        return runtime.createSession(model, options)
     }
 
     override fun close() {
@@ -142,7 +234,6 @@ class OnnxObjectDetector(private val context: Context) : AutoCloseable {
             closed = true
             session?.close()
             session = null
-            // OrtEnvironment is process-shared; do not close the global environment here.
             env = null
         }
     }

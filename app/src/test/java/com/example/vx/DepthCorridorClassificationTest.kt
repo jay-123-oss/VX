@@ -1,6 +1,8 @@
 package com.example.vx
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DepthCorridorClassificationTest {
@@ -24,6 +26,34 @@ class DepthCorridorClassificationTest {
             trackingReliable = true
         )
         assertEquals(SafetyState.WARNING, snapshot.state)
+    }
+
+    @Test
+    fun saturatedFarDepthIsUnknownNotReliable() {
+        val result = DepthCorridorAnalyzer.Result(
+            nearestDepthMm = 7867,
+            representativeDepthMm = 7867,
+            validSamples = 20,
+            totalSamples = 20,
+            confidence = 1f,
+            saturatedFarSamples = 20,
+            unknownReason = "सभी डेप्थ सैंपल अधिकतम दूरी पर हैं"
+        )
+        assertFalse(result.reliable)
+    }
+
+    @Test
+    fun mixedDepthWithNearbyReliableSurfaceCanBeUsed() {
+        val result = DepthCorridorAnalyzer.Result(
+            nearestDepthMm = 1200,
+            representativeDepthMm = 1800,
+            validSamples = 18,
+            totalSamples = 20,
+            confidence = 0.9f,
+            saturatedFarSamples = 2,
+            unknownReason = null
+        )
+        assertTrue(result.reliable)
     }
 
     @Test
