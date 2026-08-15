@@ -11,9 +11,11 @@ import android.util.Log
 import com.google.ar.core.TrackingState
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -40,6 +42,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var previousDistanceMeters: Float? = null
     private var previousDistanceTimeNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
+    @Volatile private var lastSafetySnapshotNs: Long = 0L
+    @Volatile private var watchdogAlerted = false
+    @Volatile private var lastUiUpdateNs: Long = 0L
+    @Volatile private var lastUiState: SafetyState? = null
     private var cameraPipelineStarted = false
     @Volatile private var renderLoopRunning = false
     @Volatile private var renderPeriodMs = 33L
@@ -51,10 +57,37 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             renderHandler.postDelayed(this, renderPeriodMs)
         }
     }
-    @Volatile private var searchRequested = false
-    private val perceptionExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "vx-perception").apply { priority = Thread.NORM_PRIORITY - 1 }
+    private val safetyWatchdogRunnable = object : Runnable {
+        override fun run() {
+            if (!renderLoopRunning) return
+            val last = lastSafetySnapshotNs
+            if (last > 0L && System.nanoTime() - last > SAFETY_WATCHDOG_NS && !watchdogAlerted) {
+                watchdogAlerted = true
+                val caution = SafetySnapshot(
+                    state = SafetyState.CAUTION,
+                    distanceMeters = null,
+                    confidence = 0f,
+                    timeToCollisionSeconds = null,
+                    trackingReliable = false,
+                    messageHindi = "सुरक्षा जांच रुक गई है, कृपया रुकें"
+                )
+                alerts.processSnapshot(caution, 0f)
+                overlay.updateSnapshot(caution)
+                statusTextView.text = formatSafetyMessage(caution)
+            }
+            renderHandler.postDelayed(this, SAFETY_WATCHDOG_PERIOD_MS)
+        }
     }
+    @Volatile private var searchRequested = false
+    private val perceptionExecutor: ExecutorService = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(1),
+        { runnable -> Thread(runnable, "vx-perception").apply { priority = Thread.NORM_PRIORITY - 1 } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -139,9 +172,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     trackingReliable = false,
                     messageHindi = "कैमरा/डेप्थ स्पष्ट नहीं है, रुकें"
                 )
-                alerts.processSnapshot(unknown, 0f)
-                overlay.updateSnapshot(unknown)
-                statusTextView.text = formatSafetyMessage(unknown)
+                lastSafetySnapshotNs = System.nanoTime()
+                watchdogAlerted = false
+                postSafetyUi(unknown, null)
             }
             return
         }
@@ -194,9 +227,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         confidence = corridorResult?.confidence ?: 0f,
                         trackingReliable = hasReliableDepth,
                         negativeDropOff = dropDetected,
-                        cameraBlockedWhileMoving = cameraBlockedWhileMoving
+                        cameraBlockedWhileMoving = cameraBlockedWhileMoving,
+                        groundPlaneReliable = planeAssessment.horizontalGroundTracked
                     )
 
+                    lastSafetySnapshotNs = System.nanoTime()
+                    watchdogAlerted = false
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
                     var searchResultMessage: String? = null
@@ -224,10 +260,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         }
                     }
 
-                    runOnUiThread {
-                        overlay.updateSnapshot(snapshot)
-                        statusTextView.text = searchResultMessage ?: formatSafetyMessage(snapshot)
-                    }
+                    postSafetyUi(snapshot, searchResultMessage)
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
@@ -300,7 +333,11 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         arManager.resume()
         renderLoopRunning = true
         renderHandler.removeCallbacks(renderRunnable)
+        renderHandler.removeCallbacks(safetyWatchdogRunnable)
+        lastSafetySnapshotNs = System.nanoTime()
+        watchdogAlerted = false
         renderHandler.post(renderRunnable)
+        renderHandler.postDelayed(safetyWatchdogRunnable, SAFETY_WATCHDOG_PERIOD_MS)
     }
 
     override fun onPause() {
@@ -308,10 +345,24 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         cameraPipelineStarted = false
         renderLoopRunning = false
         renderHandler.removeCallbacks(renderRunnable)
+        renderHandler.removeCallbacks(safetyWatchdogRunnable)
         surface.onPause()
         motionManager.stop()
         thermalDutyManager.stop()
         arManager.pause()
+    }
+
+    private fun postSafetyUi(snapshot: SafetySnapshot, searchResultMessage: String?) {
+        val nowNs = System.nanoTime()
+        val stateChanged = snapshot.state != lastUiState
+        val urgent = snapshot.state == SafetyState.WARNING || snapshot.state == SafetyState.EMERGENCY
+        if (searchResultMessage == null && !stateChanged && !urgent && nowNs - lastUiUpdateNs < UI_UPDATE_INTERVAL_NS) return
+        lastUiUpdateNs = nowNs
+        lastUiState = snapshot.state
+        runOnUiThread {
+            overlay.updateSnapshot(snapshot)
+            statusTextView.text = searchResultMessage ?: formatSafetyMessage(snapshot)
+        }
     }
 
     private fun formatSafetyMessage(snapshot: SafetySnapshot): String {
@@ -327,6 +378,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         super.onDestroy()
         renderLoopRunning = false
         renderHandler.removeCallbacks(renderRunnable)
+        renderHandler.removeCallbacks(safetyWatchdogRunnable)
         perceptionExecutor.shutdownNow()
         arManager.shutdown()
         objectDetector.close()
@@ -334,17 +386,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         alerts.release()
     }
 
-    private fun toHindiObjectLabel(label: String): String = when (label.lowercase()) {
-        "person" -> "व्यक्ति"
-        "car" -> "कार"
-        "truck" -> "ट्रक"
-        "bus" -> "बस"
-        "chair" -> "कुर्सी"
-        "bottle" -> "बोतल"
-        "backpack" -> "बैग"
-        "cell phone" -> "मोबाइल"
-        else -> label
-    }
+    private fun toHindiObjectLabel(label: String): String = HindiObjectLabels.labelFor(label)
 
     private fun clockDirection(centerX: Float): String = when {
         centerX < 0.33f -> "9 बजे की दिशा में"
@@ -356,5 +398,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     companion object {
         private const val CAMERA_PERMISSION_REQUEST = 101
+        private const val UI_UPDATE_INTERVAL_NS = 150_000_000L
+        private const val SAFETY_WATCHDOG_NS = 1_500_000_000L
+        private const val SAFETY_WATCHDOG_PERIOD_MS = 500L
     }
 }

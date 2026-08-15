@@ -19,6 +19,12 @@ class SafetyDecisionEngineTest {
     }
 
     @Test
+    fun unknownGroundPlaneCannotBecomeSafe() {
+        val snapshot = engine.evaluate(3.0f, 0f, 0.9f, true, groundPlaneReliable = false)
+        assertEquals(SafetyState.CAUTION, snapshot.state)
+    }
+
+    @Test
     fun fastApproachTriggersEmergencyByTtc() {
         val snapshot = engine.evaluate(1.2f, 2.0f, 0.9f, true)
         assertEquals(SafetyState.EMERGENCY, snapshot.state)

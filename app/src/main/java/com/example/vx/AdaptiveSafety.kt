@@ -59,7 +59,8 @@ class SafetyDecisionEngine {
         confidence: Float,
         trackingReliable: Boolean,
         negativeDropOff: Boolean = false,
-        cameraBlockedWhileMoving: Boolean = false
+        cameraBlockedWhileMoving: Boolean = false,
+        groundPlaneReliable: Boolean = true
     ): SafetySnapshot {
         if (negativeDropOff) {
             return SafetySnapshot(
@@ -100,11 +101,16 @@ class SafetyDecisionEngine {
             ttc != null && ttc <= 2.2f -> SafetyState.WARNING
             distanceMeters <= 1.1f -> SafetyState.WARNING
             distanceMeters <= 1.8f -> SafetyState.CAUTION
+            !groundPlaneReliable -> SafetyState.CAUTION
             else -> SafetyState.SAFE
         }
         val message = when (state) {
             SafetyState.SAFE -> "रास्ता अभी साफ है"
-            SafetyState.CAUTION -> "आगे कुछ पास है, सावधानी रखें"
+            SafetyState.CAUTION -> if (!groundPlaneReliable) {
+                "जमीन स्पष्ट नहीं है, सावधानी रखें"
+            } else {
+                "आगे कुछ पास है, सावधानी रखें"
+            }
             SafetyState.WARNING -> "सावधान, आगे रुकावट है"
             SafetyState.EMERGENCY -> "खतरा, तुरंत रुकें"
         }

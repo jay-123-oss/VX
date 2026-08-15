@@ -180,9 +180,22 @@ class OnnxObjectDetector(
         val normalizedPrompt = prompt.trim().lowercase()
         val aliases = when (normalizedPrompt) {
             "पानी", "बोतल", "water", "bottle" -> setOf("bottle", "cup", "wine glass")
-            "व्यक्ति", "आदमी", "महिला", "person", "insaan" -> setOf("person")
+            "व्यक्ति", "आदमी", "महिला", "इंसान", "person", "insaan" -> setOf("person")
+            "साइकिल", "cycle", "bicycle" -> setOf("bicycle")
+            "बाइक", "मोटरसाइकिल", "bike", "motorbike" -> setOf("motorbike")
             "कुर्सी", "chair" -> setOf("chair")
             "कार", "गाड़ी", "car" -> setOf("car", "truck", "bus")
+            "बस", "bus" -> setOf("bus")
+            "ट्रेन", "train" -> setOf("train")
+            "कुत्ता", "dog" -> setOf("dog")
+            "बिल्ली", "cat" -> setOf("cat")
+            "पक्षी", "चिड़िया", "bird" -> setOf("bird")
+            "छाता", "umbrella" -> setOf("umbrella")
+            "बैग", "backpack", "bag" -> setOf("backpack", "handbag", "suitcase")
+            "मोबाइल", "मोबाइल फोन", "cell phone", "phone" -> setOf("cell phone")
+            "किताब", "book" -> setOf("book")
+            "मेज़", "टेबल", "table", "dining table" -> setOf("diningtable")
+            "टीवी", "tv", "television" -> setOf("tvmonitor")
             else -> setOf(normalizedPrompt)
         }
         return aliases.any { label.lowercase().contains(it) }
