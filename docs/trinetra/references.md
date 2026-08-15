@@ -51,3 +51,15 @@ Key points used in the Storyteller design: Moondream2 provides image querying, d
 [13] ONNX Runtime GenAI Java API: https://onnxruntime.ai/docs/genai/api/java.html
 
 Key points used in the Storyteller design: the Java API is documented as preview and the package publication is pending, so it is kept as a future adapter rather than the first Android runtime.
+
+[14] Android ConnectivityManager NetworkCallback: https://developer.android.com/develop/connectivity/network-ops/reading-network-state
+
+Key points used in the Cloud Agent design: register a default NetworkCallback for live connectivity changes instead of polling; distinguish INTERNET from VALIDATED; do not assume Wi-Fi is unmetered; unregister the callback when no longer needed; and keep callback work off the connectivity thread.
+
+[15] Android Network Security Configuration: https://developer.android.com/privacy-and-security/security-config
+
+Key points used in the Cloud Agent design: use HTTPS/TLS, keep cleartext traffic disabled, configure trust and debug overrides declaratively, and avoid embedding insecure development exceptions in the release configuration.
+
+[16] Android Permissions Overview and Best Practices: https://developer.android.com/guide/topics/permissions/overview
+
+Key points used in the Cloud Agent design: request the minimum permissions, associate sensitive access with an explicit user action, be transparent about camera/microphone use, and minimize data shared for each task.

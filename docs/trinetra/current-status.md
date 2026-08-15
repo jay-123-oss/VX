@@ -24,6 +24,7 @@
 - The model-independent Storyteller foundation now includes a closed hazard/severity/region result schema, confidence and expiry validation, a one-frame latest-image store with replacement instead of queueing, a disabled fallback engine, lifecycle-safe close behavior, and JVM unit tests. It cannot raise a VLM-only emergency and cannot downgrade Reflex Shield safety.
 - The Phase 1/2 audit found and fixed a negative-obstacle edge case: saturated far profile samples such as 7,867 mm are now rejected as unknown ground instead of being interpreted as a pothole/drop. The regression is covered by a JVM test. The audit report records static verification and remaining physical-device gates.
 - LiteRT-LM Android 0.16.0 is now declared as a dependency, with a non-enabled CPU/GPU/NPU `LiteRtLmStorytellerEngine` adapter and Enhanced-tier benchmark harness. No model path is supplied by MainActivity and no VLM model is bundled; the existing Storyteller button remains an unavailable fallback.
+- Phase 3 Cloud Agent architecture is documented as an optional, user-consented online assistant. A model-independent `CloudAssistantGateway` contract, offline fallback, consent/network/thermal policy, bounded request schema, HTTPS relay client, response expiry checks, and cloud safety-authority rejection tests are now present. No provider endpoint, API key, continuous upload, or cloud-controlled safety decision is configured.
 
 ## Deliberate boundaries in this milestone
 
