@@ -23,3 +23,31 @@ Key point used in the implementation: Android documents NNAPI as deprecated in A
 [6] Android Thermal API: https://developer.android.com/games/optimize/adpf/thermal
 
 Key points used in the implementation: `PowerManager.getThermalHeadroom()` supports proactive workload control, should not be called more than once every 10 seconds, and should be interpreted together with thermal status because device mappings vary.
+
+[7] LiteRT-LM Overview: https://developers.google.com/edge/litert-lm/overview
+
+Key points used in the Storyteller design: LiteRT-LM documents Android support, multimodal models, CPU/GPU/NPU backends, and a Kotlin API.
+
+[8] LiteRT-LM Android Kotlin Guide: https://developers.google.com/edge/litert-lm/android
+
+Key points used in the Storyteller design: Android integration uses a Kotlin API, image content, background engine initialization, closeable resources, backend selection, and explicit error handling.
+
+[9] Gemma 3n E2B LiteRT-LM Model Card: https://huggingface.co/google/gemma-3n-E2B-it-litert-lm
+
+Key points used in the Storyteller design: Gemma 3n E2B supports image input in LiteRT-LM format and reports multilingual training, but the model size and published benchmark devices require physical validation for the 4 GB target.
+
+[10] Gemma Terms of Use: https://ai.google.dev/gemma/terms
+
+Key points used in the Storyteller design: Gemma distribution requires the terms, use restrictions, and notice obligations to be passed to recipients; model terms must be reviewed before public or commercial APK distribution.
+
+[11] SmolVLM-256M-Instruct Model Card: https://huggingface.co/HuggingFaceTB/SmolVLM-256M-Instruct
+
+Key points used in the Storyteller design: the model card documents image-text input, ONNX weights, Apache 2.0 licensing, English NLP capability, and an explicit warning against high-stakes or critical decision-making.
+
+[12] Moondream2 Model Card: https://huggingface.co/vikhyatk/moondream2
+
+Key points used in the Storyteller design: Moondream2 provides image querying, detection, and pointing skills under Apache 2.0, but its 2B BF16/custom-code path is not the first 4 GB Android integration choice.
+
+[13] ONNX Runtime GenAI Java API: https://onnxruntime.ai/docs/genai/api/java.html
+
+Key points used in the Storyteller design: the Java API is documented as preview and the package publication is pending, so it is kept as a future adapter rather than the first Android runtime.
