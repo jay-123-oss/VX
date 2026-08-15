@@ -1,3 +1,5 @@
 <resources>
-    <string name="app_name">VX</string>
+    <string name="app_name">Trinetra</string>
+    <string name="status_ready">सिस्टम तैयार है</string>
+    <string name="vlm_button">अभी दृश्य बताएं</string>
 </resources>

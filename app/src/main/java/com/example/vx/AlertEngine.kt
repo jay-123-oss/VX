@@ -7,22 +7,23 @@ import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.speech.tts.TextToSpeech
 import android.util.Log
+import java.util.Locale
 
-/**
- * Handles Pulsed Haptics and Spatial Audio Panning.
- */
-class AlertEngine(private val context: Context) {
+/** Priority feedback controller: emergency > warning > search/context. */
+class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
     private val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+        context.getSystemService(VibratorManager::class.java).defaultVibrator
     } else {
         @Suppress("DEPRECATION")
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
-
-    private var soundPool: SoundPool
-    private var alertSoundId: Int = 0
+    private val soundPool: SoundPool
+    private var ttsReady = false
     private var lastVibrateTime = 0L
+    private var lastState = SafetyState.CAUTION
+    private val tts = TextToSpeech(context.applicationContext, this)
 
     init {
         val attr = AudioAttributes.Builder()
@@ -30,50 +31,93 @@ class AlertEngine(private val context: Context) {
             .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
             .build()
         soundPool = SoundPool.Builder().setMaxStreams(3).setAudioAttributes(attr).build()
-        // alertSoundId = soundPool.load(context, R.raw.beep, 1)
     }
 
-    /**
-     * distanceMm: distance in millimeters
-     * xPos: normalized X coordinate (-1.0 Left to 1.0 Right)
-     */
+    override fun onInit(status: Int) {
+        ttsReady = status == TextToSpeech.SUCCESS
+        if (ttsReady) {
+            tts.language = Locale("hi", "IN")
+            tts.setSpeechRate(0.92f)
+        }
+    }
+
+    /** Existing distance API retained for compatibility with existing VX callers. */
     fun processAlert(distanceMm: Int, xPos: Float) {
-        if (distanceMm > 2000 || distanceMm <= 0) return
+        val snapshot = if (distanceMm <= 0) {
+            SafetySnapshot(SafetyState.CAUTION, null, 0f, null, false, "आगे की सतह स्पष्ट नहीं है, सावधानी रखें")
+        } else {
+            SafetyDecisionEngine().evaluate(
+                distanceMeters = distanceMm / 1000f,
+                relativeApproachMetersPerSecond = null,
+                confidence = 0.9f,
+                trackingReliable = true
+            )
+        }
+        processSnapshot(snapshot, xPos)
+    }
 
+    fun processSnapshot(snapshot: SafetySnapshot, xPos: Float) {
         val now = System.currentTimeMillis()
-        
-        // Pulse frequency based on distance: Closer = Faster pulse
-        val interval = when {
-            distanceMm < 500 -> 100L // Continuous-like
-            distanceMm < 1000 -> 300L
-            distanceMm < 1500 -> 600L
-            else -> 1000L
+        val interval = when (snapshot.state) {
+            SafetyState.EMERGENCY -> 120L
+            SafetyState.WARNING -> 320L
+            SafetyState.CAUTION -> 800L
+            SafetyState.SAFE -> Long.MAX_VALUE
         }
+        if (snapshot.state == SafetyState.SAFE || now - lastVibrateTime < interval) return
 
-        if (now - lastVibrateTime > interval) {
-            triggerVibration(distanceMm)
-            playSpatialBeep(xPos, distanceMm)
-            lastVibrateTime = now
+        val stateEscalated = snapshot.state.ordinal > lastState.ordinal
+        lastState = snapshot.state
+        lastVibrateTime = now
+        when (snapshot.state) {
+            SafetyState.CAUTION -> {
+                triggerVibration(longArrayOf(0, 35), 90)
+                playSpatialBeep(xPos, 1200)
+            }
+            SafetyState.WARNING -> {
+                triggerVibration(longArrayOf(0, 90, 100, 90), 180)
+                playSpatialBeep(xPos, 800)
+                if (stateEscalated) speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+            }
+            SafetyState.EMERGENCY -> {
+                triggerVibration(longArrayOf(0, 180, 80, 180, 80, 180), 255)
+                playSpatialBeep(xPos, 350)
+                speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+            }
+            SafetyState.SAFE -> Unit
         }
     }
 
-    private fun triggerVibration(dist: Int) {
-        val amplitude = if (dist < 800) 255 else 120
-        val duration = if (dist < 800) 200L else 100L
-        vibrator.vibrate(VibrationEffect.createOneShot(duration, amplitude))
+    fun speakSearch(messageHindi: String) {
+        speak(messageHindi, TextToSpeech.QUEUE_ADD)
     }
 
-    private fun playSpatialBeep(xPos: Float, dist: Int) {
-        // Panning: -1.0 (Left), 0.0 (Center), 1.0 (Right)
-        val leftVol = if (xPos < 0) 1.0f else (1.0f - xPos)
-        val rightVol = if (xPos > 0) 1.0f else (1.0f + xPos)
-        val intensity = (2000f - dist) / 2000f
+    private fun speak(text: String, queueMode: Int) {
+        if (ttsReady) tts.speak(text, queueMode, null, "vx-${System.currentTimeMillis()}")
+    }
 
-        // soundPool.play(alertSoundId, leftVol * intensity, rightVol * intensity, 1, 0, 1.0f + intensity)
-        Log.v("AlertEngine", "Beep: Dist=$dist, Pan=$xPos")
+    private fun triggerVibration(pattern: LongArray, amplitude: Int) {
+        if (!vibrator.hasVibrator()) return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate(pattern, -1)
+        }
+        Log.v("AlertEngine", "Vibration amplitude=$amplitude")
+    }
+
+    private fun playSpatialBeep(xPos: Float, distanceMm: Int) {
+        val intensity = ((2000f - distanceMm) / 2000f).coerceIn(0.15f, 1f)
+        val leftVol = if (xPos < 0) 1f else 1f - xPos.coerceIn(0f, 1f)
+        val rightVol = if (xPos > 0) 1f else 1f + xPos.coerceIn(-1f, 0f)
+        // Audio asset is optional until final beep samples are selected.
+        Log.v("AlertEngine", "Beep left=$leftVol right=$rightVol intensity=$intensity")
     }
 
     fun release() {
+        tts.stop()
+        tts.shutdown()
         soundPool.release()
     }
 }

@@ -21,6 +21,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var alerts: AlertEngine
     private lateinit var overlay: OverlayView
     private lateinit var surface: GLSurfaceView
+    private lateinit var statusTextView: android.widget.TextView
+    private lateinit var safetyEngine: SafetyDecisionEngine
+    private lateinit var deviceProfile: DeviceProfile
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,10 +31,25 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         surface = findViewById(R.id.surfaceview)
         overlay = findViewById(R.id.overlayView)
-        
+        statusTextView = findViewById(R.id.statusTextView)
+
+        safetyEngine = SafetyDecisionEngine()
+        deviceProfile = DeviceCapabilityDetector(this).detect()
+        statusTextView.text = deviceProfile.messageHindi
+
         arManager = ARCoreVisionManager(this)
         yolo = YoloDetector(this)
         alerts = AlertEngine(this)
+
+        findViewById<android.widget.Button>(R.id.vlmButton).setOnClickListener {
+            val message = when (deviceProfile.tier) {
+                CapabilityTier.ENHANCED -> "स्थानीय स्टोरीटेलर मॉडल तैयार होने पर दृश्य का वर्णन मिलेगा"
+                CapabilityTier.STANDARD -> "इस फोन पर दृश्य विश्लेषण कम ऊर्जा मोड में उपलब्ध होगा"
+                CapabilityTier.BASIC -> "इस फोन पर अभी सुरक्षा मोड सक्रिय है"
+            }
+            alerts.speakSearch(message)
+            statusTextView.text = message
+        }
 
         surface.setEGLContextClientVersion(2)
         surface.setRenderer(this)
@@ -50,28 +68,26 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         arManager.onFrame(frame) { camImage, depthImage ->
             lifecycleScope.launch(Dispatchers.Default) {
                 try {
-                    // Logic Simulation for UI Testing (If model output is empty)
-                    // In real: yolo.detect(camImage)
+                    // Safety remains independent from YOLO and VLM. Unknown depth is caution,
+                    // never a simulated clear path.
+                    val normX = 0.5f
+                    val normY = 0.5f
+                    val distanceMm = depthImage?.let {
+                        DepthFusionMath.getAverageDepth(normX, normY, it)
+                    } ?: 0
+                    val hasReliableDepth = depthImage != null && distanceMm > 0
+                    val snapshot = safetyEngine.evaluate(
+                        distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f),
+                        relativeApproachMetersPerSecond = null,
+                        confidence = if (hasReliableDepth) 0.85f else 0f,
+                        trackingReliable = hasReliableDepth
+                    )
 
-                    // Expert Fusion: Center point analysis
-                    val normX = 0.5f; val normY = 0.5f
-                    var distance = 0
-                    
-                    if (depthImage != null) {
-                        distance = DepthFusionMath.getAverageDepth(normX, normY, depthImage)
-                    }
-                    
-                    // Fallback to Heuristic if depth is 0
-                    if (distance <= 0) {
-                        distance = DepthFusionMath.estimateDistanceByArea(0.3f, 0.4f)
-                    }
+                    alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
-                    // Trigger Haptics/Audio
-                    alerts.processAlert(distance, (normX * 2) - 1.0f)
-
-                    // Update Circular UI
                     runOnUiThread {
-                        overlay.updateAlert(distance)
+                        overlay.updateSnapshot(snapshot)
+                        statusTextView.text = snapshot.messageHindi
                     }
 
                 } finally {
