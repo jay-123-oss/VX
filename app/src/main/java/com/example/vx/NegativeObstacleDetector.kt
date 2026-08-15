@@ -14,8 +14,8 @@ class NegativeObstacleDetector {
 
     private var consecutiveDropFrames = 0
 
-    fun assess(profileMillimeters: IntArray): Assessment {
-        if (profileMillimeters.size < 3) return unknown()
+    fun assess(profileMillimeters: IntArray, groundPlaneTracked: Boolean = true): Assessment {
+        if (profileMillimeters.size < 3 || !groundPlaneTracked) return unknown()
         val upper = profileMillimeters[0]
         val middle = profileMillimeters[profileMillimeters.size / 2]
         val lower = profileMillimeters.last()

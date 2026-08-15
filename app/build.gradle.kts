@@ -52,7 +52,7 @@ android {
     }
 
     androidResources {
-        noCompress += "tflite"
+        noCompress += listOf("tflite", "onnx")
     }
 
     packaging {
@@ -74,7 +74,8 @@ dependencies {
     implementation(libs.google.arcore)
 
     // ML Engine (LiteRT / TensorFlow Lite)
-    implementation(libs.litert)
+    implementation(libs.onnxruntime.android)
+    implementation(libs.onnxruntime.extensions.android)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

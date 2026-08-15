@@ -18,13 +18,14 @@ import javax.microedition.khronos.opengles.GL10
 class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     private lateinit var arManager: ARCoreVisionManager
-    private lateinit var yolo: YoloDetector
+    private lateinit var objectDetector: OnnxObjectDetector
     private lateinit var alerts: AlertEngine
     private lateinit var overlay: OverlayView
     private lateinit var surface: GLSurfaceView
     private lateinit var statusTextView: android.widget.TextView
     private lateinit var safetyEngine: SafetyDecisionEngine
     private lateinit var corridorAnalyzer: DepthCorridorAnalyzer
+    private lateinit var planeGroundAnalyzer: PlaneGroundAnalyzer
     private lateinit var deviceProfile: DeviceProfile
     private lateinit var motionManager: SensorMotionManager
     private lateinit var negativeObstacleDetectors: Array<NegativeObstacleDetector>
@@ -35,6 +36,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var previousDistanceTimeNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
     private var cameraPipelineStarted = false
+    @Volatile private var searchRequested = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +48,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         safetyEngine = SafetyDecisionEngine()
         corridorAnalyzer = DepthCorridorAnalyzer()
+        planeGroundAnalyzer = PlaneGroundAnalyzer()
         deviceProfile = DeviceCapabilityDetector(this).detect()
         statusTextView.text = deviceProfile.messageHindi
         motionManager = SensorMotionManager(this)
@@ -53,8 +56,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         thermalDutyManager = ThermalDutyManager(this, deviceProfile.tier)
 
         arManager = ARCoreVisionManager(this)
-        yolo = YoloDetector(this)
+        objectDetector = OnnxObjectDetector(this)
         alerts = AlertEngine(this)
+
+        findViewById<android.widget.Button>(R.id.searchButton).setOnClickListener {
+            searchRequested = true
+            statusTextView.text = "ऑफलाइन वस्तु खोज शुरू हो रही है"
+            alerts.speakSearch("ऑफलाइन वस्तु खोज शुरू हो रही है")
+        }
 
         findViewById<android.widget.Button>(R.id.vlmButton).setOnClickListener {
             val message = when (deviceProfile.tier) {
@@ -85,6 +94,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             return
         }
 
+        val planeAssessment = planeGroundAnalyzer.assess(frame)
         val thermalPolicy = thermalDutyManager.policy()
         val targetFps = if (motionManager.currentState() == SensorMotionManager.State.STILL) {
             5
@@ -139,7 +149,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                                 normX = safetyCorridorXs[index],
                                 normalizedYs = groundProfileYs
                             )
-                            val assessment = negativeObstacleDetectors[index].assess(profile)
+                            val assessment = negativeObstacleDetectors[index].assess(
+                                profileMillimeters = profile,
+                                groundPlaneTracked = planeAssessment.horizontalGroundTracked
+                            )
                             dropDetected = dropDetected || assessment.dropDetected
                             unknownGround = unknownGround || assessment.unknownGround
                         }
@@ -156,14 +169,41 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
+                    var searchResultMessage: String? = null
+                    if (searchRequested) {
+                        searchRequested = false
+                        if (!thermalPolicy.runSearch) {
+                            alerts.speakSearch("फोन गर्म है, वस्तु खोज अभी रोक दी गई है")
+                        } else {
+                            val imageBytes = ImageFrameEncoder.toJpeg(camImage)
+                            val detections = imageBytes?.let { objectDetector.detect(it) }.orEmpty()
+                            val best = detections.maxByOrNull { it.confidence }
+                            val searchMessage = if (best == null) {
+                                "वस्तु नहीं मिली"
+                            } else {
+                                val objectDistanceMm = depthImage?.let {
+                                    DepthFusionMath.getAverageDepth(best.centerX, best.centerY, it)
+                                } ?: 0
+                                val distanceText = if (objectDistanceMm > 0) {
+                                    String.format(java.util.Locale.US, "%.1f मीटर", objectDistanceMm / 1000f)
+                                } else {
+                                    "दूरी स्पष्ट नहीं"
+                                }
+                                "${toHindiObjectLabel(best.label)} ${clockDirection(best.centerX)}, $distanceText"
+                            }
+                            alerts.speakSearch(searchMessage)
+                            searchResultMessage = searchMessage
+                        }
+                    }
+
                     runOnUiThread {
                         overlay.updateSnapshot(snapshot)
-                        statusTextView.text = formatSafetyMessage(snapshot)
+                        statusTextView.text = searchResultMessage ?: formatSafetyMessage(snapshot)
                     }
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
-                            "tracking=${hasReliableDepth} depthMm=$distanceMm drop=$dropDetected unknownGround=$unknownGround motion=${motionManager.currentState()} fps=$targetFps"
+                            "tracking=${hasReliableDepth} depthMm=$distanceMm drop=$dropDetected unknownGround=$unknownGround plane=${planeAssessment.horizontalGroundTracked} planes=${planeAssessment.trackedPlaneCount} motion=${motionManager.currentState()} fps=$targetFps"
                         )
                         lastSafetyLogNs = nowNs
                     }
@@ -248,8 +288,28 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     override fun onDestroy() {
         super.onDestroy()
         arManager.shutdown()
-        yolo.close()
+        objectDetector.close()
         alerts.release()
+    }
+
+    private fun toHindiObjectLabel(label: String): String = when (label.lowercase()) {
+        "person" -> "व्यक्ति"
+        "car" -> "कार"
+        "truck" -> "ट्रक"
+        "bus" -> "बस"
+        "chair" -> "कुर्सी"
+        "bottle" -> "बोतल"
+        "backpack" -> "बैग"
+        "cell phone" -> "मोबाइल"
+        else -> label
+    }
+
+    private fun clockDirection(centerX: Float): String = when {
+        centerX < 0.33f -> "9 बजे की दिशा में"
+        centerX < 0.45f -> "10 बजे की दिशा में"
+        centerX < 0.55f -> "12 बजे की दिशा में"
+        centerX < 0.67f -> "2 बजे की दिशा में"
+        else -> "3 बजे की दिशा में"
     }
 
     companion object {

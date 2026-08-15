@@ -2,4 +2,5 @@
     <string name="app_name">Trinetra</string>
     <string name="status_ready">सिस्टम तैयार है</string>
     <string name="vlm_button">अभी दृश्य बताएं</string>
+    <string name="search_button">वस्तु खोजें</string>
 </resources>

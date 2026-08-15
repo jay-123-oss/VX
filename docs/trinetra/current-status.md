@@ -10,6 +10,9 @@
 - The app includes three-column lower-scene sampling for possible drop-offs, a five-by-four multi-point depth corridor for nearest reliable obstacle distance, filtered IMU motion state, thermal-aware frame-rate policy, Hindi TTS, haptic priority feedback, and audible stereo left/right beep fallback.
 - Reliable clear space is shown with green status and measured distance; a reliable nearby surface is shown as a Hindi obstacle with measured distance and warning color/feedback; unknown depth never becomes green.
 - Camera permission is now checked before both Activity startup and ARCore session creation. If permission is denied or revoked, the app remains open with a Hindi explanation instead of crashing during `onResume()`.
+- The official ONNX Runtime pre/post-processing YOLOv8n model is bundled locally and loaded lazily from assets when the user presses `वस्तु खोजें`; Android uses ONNX Runtime plus ONNX Runtime Extensions.
+- ONNX detections are mapped to ARCore depth for approximate distance and clock direction, with Hindi aliases for common COCO classes. The current asset is fixed-vocabulary YOLOv8, not true promptable YOLO-World.
+- ARCore horizontal upward-facing plane tracking now supplies a ground reference to negative-obstacle analysis. Vibration amplitude, TTS throttling, and stereo beep feedback were optimized.
 
 ## Deliberate boundaries in this milestone
 

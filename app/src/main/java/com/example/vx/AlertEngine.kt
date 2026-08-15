@@ -23,6 +23,7 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
     private val spatialBeep = SpatialBeepPlayer()
     private var ttsReady = false
     private var lastVibrateTime = 0L
+    private var lastSpokenTime = 0L
     private var lastState = SafetyState.CAUTION
     private val tts = TextToSpeech(context.applicationContext, this)
 
@@ -65,7 +66,11 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
             SafetyState.CAUTION -> 800L
             SafetyState.SAFE -> Long.MAX_VALUE
         }
-        if (snapshot.state == SafetyState.SAFE || now - lastVibrateTime < interval) return
+        if (snapshot.state == SafetyState.SAFE) {
+            lastState = SafetyState.SAFE
+            return
+        }
+        if (now - lastVibrateTime < interval) return
 
         val stateEscalated = snapshot.state.ordinal > lastState.ordinal
         lastState = snapshot.state
@@ -78,12 +83,18 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
             SafetyState.WARNING -> {
                 triggerVibration(longArrayOf(0, 90, 100, 90), 180)
                 playSpatialBeep(xPos, 800)
-                if (stateEscalated) speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+                if (stateEscalated && now - lastSpokenTime >= 900L) {
+                    speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+                    lastSpokenTime = now
+                }
             }
             SafetyState.EMERGENCY -> {
                 triggerVibration(longArrayOf(0, 180, 80, 180, 80, 180), 255)
                 playSpatialBeep(xPos, 350)
-                speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+                if (now - lastSpokenTime >= 700L) {
+                    speak(snapshot.messageHindi, TextToSpeech.QUEUE_FLUSH)
+                    lastSpokenTime = now
+                }
             }
             SafetyState.SAFE -> Unit
         }
@@ -100,7 +111,8 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
     private fun triggerVibration(pattern: LongArray, amplitude: Int) {
         if (!vibrator.hasVibrator()) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            vibrator.vibrate(VibrationEffect.createWaveform(pattern, -1))
+            val amplitudes = pattern.map { if (it == 0L) 0 else amplitude.coerceIn(1, 255) }.toIntArray()
+            vibrator.vibrate(VibrationEffect.createWaveform(pattern, amplitudes, -1))
         } else {
             @Suppress("DEPRECATION")
             vibrator.vibrate(pattern, -1)
