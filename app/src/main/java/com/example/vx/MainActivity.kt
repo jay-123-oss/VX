@@ -24,6 +24,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var surface: GLSurfaceView
     private lateinit var statusTextView: android.widget.TextView
     private lateinit var safetyEngine: SafetyDecisionEngine
+    private lateinit var corridorAnalyzer: DepthCorridorAnalyzer
     private lateinit var deviceProfile: DeviceProfile
     private lateinit var motionManager: SensorMotionManager
     private lateinit var negativeObstacleDetectors: Array<NegativeObstacleDetector>
@@ -43,6 +44,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         statusTextView = findViewById(R.id.statusTextView)
 
         safetyEngine = SafetyDecisionEngine()
+        corridorAnalyzer = DepthCorridorAnalyzer()
         deviceProfile = DeviceCapabilityDetector(this).detect()
         statusTextView.text = deviceProfile.messageHindi
         motionManager = SensorMotionManager(this)
@@ -102,7 +104,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                 )
                 alerts.processSnapshot(unknown, 0f)
                 overlay.updateSnapshot(unknown)
-                statusTextView.text = unknown.messageHindi
+                statusTextView.text = formatSafetyMessage(unknown)
             }
             return
         }
@@ -113,12 +115,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     // Safety remains independent from YOLO and VLM. Unknown depth is caution,
                     // never a simulated clear path.
                     val normX = 0.5f
-                    val normY = 0.5f
-                    val distanceMm = depthImage?.let {
-                        DepthFusionMath.getAverageDepth(normX, normY, it)
-                    } ?: 0
+                    val corridorResult = depthImage?.let { corridorAnalyzer.analyze(it) }
+                    val distanceMm = corridorResult?.nearestDepthMm ?: 0
                     val distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f)
-                    val hasReliableDepth = depthImage != null && distanceMm > 0
+                    val hasReliableDepth = corridorResult?.reliable == true
                     val nowNs = System.nanoTime()
                     val deltaSeconds = if (previousDistanceTimeNs > 0L) {
                         (nowNs - previousDistanceTimeNs) / 1_000_000_000f
@@ -147,7 +147,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     val snapshot = safetyEngine.evaluate(
                         distanceMeters = distanceMeters,
                         relativeApproachMetersPerSecond = relativeApproach,
-                        confidence = if (hasReliableDepth) 0.85f else 0f,
+                        confidence = corridorResult?.confidence ?: 0f,
                         trackingReliable = hasReliableDepth,
                         negativeDropOff = dropDetected,
                         cameraBlockedWhileMoving = cameraBlockedWhileMoving
@@ -157,7 +157,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
                     runOnUiThread {
                         overlay.updateSnapshot(snapshot)
-                        statusTextView.text = snapshot.messageHindi
+                        statusTextView.text = formatSafetyMessage(snapshot)
                     }
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
@@ -202,6 +202,15 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         motionManager.stop()
         thermalDutyManager.stop()
         arManager.pause()
+    }
+
+    private fun formatSafetyMessage(snapshot: SafetySnapshot): String {
+        val distance = snapshot.distanceMeters?.let { String.format(java.util.Locale.US, "%.1f m", it) }
+        return when {
+            snapshot.state == SafetyState.SAFE && distance != null -> "हरा: रास्ता साफ • दूरी $distance"
+            distance != null -> "रुकावट • दूरी $distance • ${snapshot.messageHindi}"
+            else -> snapshot.messageHindi
+        }
     }
 
     override fun onDestroy() {

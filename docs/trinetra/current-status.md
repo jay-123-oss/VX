@@ -7,7 +7,8 @@
 - The debug APK packages successfully.
 - The ARCore manager now creates one session, resumes only from Activity lifecycle callbacks, preserves surface setup ordering, and throttles frame ownership with a bounded in-flight flag.
 - SafetyDecisionEngine tests cover unknown tracking, stable distance, fast approach/TTC, and negative-obstacle confirmation.
-- The app includes three-column lower-scene sampling for possible drop-offs, filtered IMU motion state, thermal-aware frame-rate policy, Hindi TTS, haptic priority feedback, and audible stereo left/right beep fallback.
+- The app includes three-column lower-scene sampling for possible drop-offs, a five-by-four multi-point depth corridor for nearest reliable obstacle distance, filtered IMU motion state, thermal-aware frame-rate policy, Hindi TTS, haptic priority feedback, and audible stereo left/right beep fallback.
+- Reliable clear space is shown with green status and measured distance; a reliable nearby surface is shown as a Hindi obstacle with measured distance and warning color/feedback; unknown depth never becomes green.
 
 ## Deliberate boundaries in this milestone
 
