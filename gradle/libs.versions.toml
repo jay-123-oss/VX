@@ -14,6 +14,7 @@ arcore = "1.54.0"
 coroutines = "1.11.0"
 litert = "2.17.0"
 litertSupport = "0.5.0"
+litertLm = "0.16.0"
 onnxruntime = "1.29.0"
 onnxruntimeExtensions = "0.13.0"
 
@@ -35,6 +36,7 @@ kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-
 litert = { group = "org.tensorflow", name = "tensorflow-lite", version.ref = "litert" }
 litert-gpu = { group = "org.tensorflow", name = "tensorflow-lite-gpu", version.ref = "litert" }
 litert-support = { group = "org.tensorflow", name = "tensorflow-lite-support", version.ref = "litertSupport" }
+litertlm-android = { group = "com.google.ai.edge.litertlm", name = "litertlm-android", version.ref = "litertLm" }
 onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 onnxruntime-extensions-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-extensions-android", version.ref = "onnxruntimeExtensions" }
 

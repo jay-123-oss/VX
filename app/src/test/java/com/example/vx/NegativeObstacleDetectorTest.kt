@@ -22,6 +22,13 @@ class NegativeObstacleDetectorTest {
     }
 
     @Test
+    fun saturatedFarDepthIsUnknownNotDrop() {
+        val result = NegativeObstacleDetector().assess(intArrayOf(1200, 1800, 7867, 7867))
+        assertTrue(result.unknownGround)
+        assertFalse(result.dropDetected)
+    }
+
+    @Test
     fun missingDepthIsUnknownNotClear() {
         val result = NegativeObstacleDetector().assess(intArrayOf(0, 0, 0, 0))
         assertTrue(result.unknownGround)

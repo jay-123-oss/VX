@@ -103,6 +103,10 @@ class LatestStorytellerFrame(
     }
 
     @Synchronized
+    fun hasFreshPending(nowNs: Long = System.nanoTime()): Boolean =
+        !closed && pending?.isFreshAt(nowNs) == true
+
+    @Synchronized
     fun clear() {
         pending = null
     }

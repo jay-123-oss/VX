@@ -73,7 +73,8 @@ dependencies {
     // ARCore
     implementation(libs.google.arcore)
 
-    // ML Engine (LiteRT / TensorFlow Lite)
+    // ML Engine (LiteRT-LM Storyteller adapter + offline ONNX Search Engine)
+    implementation(libs.litertlm.android)
     implementation(libs.onnxruntime.android)
     implementation(libs.onnxruntime.extensions.android)
 

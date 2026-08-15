@@ -16,6 +16,10 @@ class NegativeObstacleDetector {
 
     fun assess(profileMillimeters: IntArray, groundPlaneTracked: Boolean = true): Assessment {
         if (profileMillimeters.size < 3 || !groundPlaneTracked) return unknown()
+        if (profileMillimeters.any { it <= 0 || it >= FAR_SATURATION_MM }) {
+            consecutiveDropFrames = 0
+            return unknown()
+        }
         val upper = profileMillimeters[0]
         val middle = profileMillimeters[profileMillimeters.size / 2]
         val lower = profileMillimeters.last()
@@ -57,5 +61,6 @@ class NegativeObstacleDetector {
         private const val MIN_EXCESS_DROP_MM = 450
         private const val MIN_NEAR_RISE_MM = 700
         private const val REQUIRED_CONFIRMATION_FRAMES = 2
+        private const val FAR_SATURATION_MM = 7800
     }
 }

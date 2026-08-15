@@ -100,12 +100,12 @@ class OnnxObjectDetector(
         if (imageBytes.isEmpty() || closed) return emptyList()
         val runtime = synchronized(lock) { env ?: OrtEnvironment.getEnvironment().also { env = it } }
         return Provider.values().map { provider ->
-            val startNs = SystemClock.elapsedRealtimeNanos()
             var failed = 0
             var completed = 0
             val temporarySession = runCatching { createSession(runtime, provider) }.getOrElse { error ->
                 return@map ProviderBenchmark(provider, false, 0.0, 1, error.message ?: "provider unavailable")
             }
+            val startNs = SystemClock.elapsedRealtimeNanos()
             temporarySession.use { candidate ->
                 repeat(runs.coerceIn(1, 5)) {
                     runCatching { runForRows(runtime, candidate, imageBytes) }
