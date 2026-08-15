@@ -7,6 +7,7 @@ import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import com.google.ar.core.TrackingState
 import androidx.appcompat.app.AppCompatActivity
@@ -46,6 +47,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     @Volatile private var watchdogAlerted = false
     @Volatile private var lastUiUpdateNs: Long = 0L
     @Volatile private var lastUiState: SafetyState? = null
+    @Volatile private var lastUiMessage: String? = null
     private var cameraPipelineStarted = false
     @Volatile private var renderLoopRunning = false
     @Volatile private var renderPeriodMs = 33L
@@ -79,6 +81,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
     }
     @Volatile private var searchRequested = false
+    @Volatile private var lastSearchRunMs = 0L
+    @Volatile private var thermalCooldownUntilMs = 0L
+    @Volatile private var lastThermalStatus = Int.MIN_VALUE
     private val perceptionExecutor: ExecutorService = ThreadPoolExecutor(
         1,
         1,
@@ -235,13 +240,33 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     watchdogAlerted = false
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
+                    val nowMs = SystemClock.elapsedRealtime()
+                    val thermalMessage = thermalStatusMessage(thermalPolicy, nowMs)
                     var searchResultMessage: String? = null
                     if (searchRequested) {
                         searchRequested = false
+                        val profile = OnnxSearchScheduler.profile(
+                            thermalStatus = thermalPolicy.thermalStatus,
+                            thermalHeadroom = thermalPolicy.thermalHeadroom
+                        )
                         if (!thermalPolicy.runSearch) {
-                            alerts.speakSearch("फोन गर्म है, वस्तु खोज अभी रोक दी गई है")
+                            var remaining = cooldownRemainingSeconds(nowMs, thermalPolicy.searchCooldownSeconds)
+                            if (remaining == 0L) {
+                                thermalCooldownUntilMs = nowMs + thermalPolicy.searchCooldownSeconds * 1_000L
+                                remaining = thermalPolicy.searchCooldownSeconds.toLong().coerceAtLeast(1L)
+                            }
+                            searchResultMessage = "${thermalPolicy.messageHindi} फिर प्रयास: ${remaining} सेकंड बाद"
+                            alerts.speakSearch(searchResultMessage!!)
+                        } else if (!OnnxSearchScheduler.canRun(nowMs, lastSearchRunMs, profile)) {
+                            val remaining = ((profile.minIntervalMs - (nowMs - lastSearchRunMs) + 999L) / 1000L).coerceAtLeast(1L)
+                            searchResultMessage = "वस्तु खोज कूलडाउन: ${remaining} सेकंड"
                         } else {
-                            val imageBytes = ImageFrameEncoder.toJpeg(camImage)
+                            lastSearchRunMs = nowMs
+                            val imageBytes = ImageFrameEncoder.toJpeg(
+                                camImage,
+                                maxDimension = profile.maxImageDimension,
+                                quality = profile.jpegQuality
+                            )
                             val detections = imageBytes?.let { objectDetector.detect(it) }.orEmpty()
                             val best = detections.maxByOrNull { it.confidence }
                             val searchMessage = if (best == null) {
@@ -256,11 +281,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                                 "${toHindiObjectLabel(best.label)} ${clockDirection(best.centerX)}, $distanceText"
                             }
                             alerts.speakSearch(searchMessage)
-                            searchResultMessage = searchMessage
+                            searchResultMessage = "${profile.messageHindi}: $searchMessage"
+                            Log.i("OnnxObjectDetector", "Search profile=${profile.name} maxDimension=${profile.maxImageDimension} jpegQuality=${profile.jpegQuality}")
                         }
                     }
 
-                    postSafetyUi(snapshot, searchResultMessage)
+                    postSafetyUi(snapshot, searchResultMessage ?: thermalMessage)
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
@@ -374,13 +400,39 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         arManager.pause()
     }
 
+    private fun thermalStatusMessage(policy: ThermalDutyManager.Policy, nowMs: Long): String? {
+        val isThermallyLimited = policy.thermalStatus >= android.os.PowerManager.THERMAL_STATUS_LIGHT
+        if (!isThermallyLimited) {
+            lastThermalStatus = policy.thermalStatus
+            thermalCooldownUntilMs = 0L
+            return null
+        }
+        if (policy.thermalStatus != lastThermalStatus) {
+            lastThermalStatus = policy.thermalStatus
+            thermalCooldownUntilMs = nowMs + policy.searchCooldownSeconds * 1_000L
+        }
+        val remaining = cooldownRemainingSeconds(nowMs, policy.searchCooldownSeconds)
+        return if (remaining > 0L) {
+            "${policy.messageHindi} फिर जांच: ${remaining} सेकंड बाद"
+        } else {
+            "${policy.messageHindi} कूलडाउन समाप्त; ठंडा होने तक सुरक्षा प्राथमिक है"
+        }
+    }
+
+    private fun cooldownRemainingSeconds(nowMs: Long, defaultSeconds: Int): Long {
+        if (thermalCooldownUntilMs <= nowMs) return 0L
+        return ((thermalCooldownUntilMs - nowMs + 999L) / 1_000L).coerceAtLeast(1L)
+    }
+
     private fun postSafetyUi(snapshot: SafetySnapshot, searchResultMessage: String?) {
         val nowNs = System.nanoTime()
         val stateChanged = snapshot.state != lastUiState
+        val messageChanged = searchResultMessage != lastUiMessage
         val urgent = snapshot.state == SafetyState.WARNING || snapshot.state == SafetyState.EMERGENCY
-        if (searchResultMessage == null && !stateChanged && !urgent && nowNs - lastUiUpdateNs < UI_UPDATE_INTERVAL_NS) return
+        if (!stateChanged && !messageChanged && !urgent && nowNs - lastUiUpdateNs < UI_UPDATE_INTERVAL_NS) return
         lastUiUpdateNs = nowNs
         lastUiState = snapshot.state
+        lastUiMessage = searchResultMessage
         runOnUiThread {
             overlay.updateSnapshot(snapshot)
             statusTextView.text = searchResultMessage ?: formatSafetyMessage(snapshot)

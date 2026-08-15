@@ -18,7 +18,8 @@ class ThermalDutyManager(
         val cameraFps: Int,
         val messageHindi: String,
         val thermalStatus: Int,
-        val thermalHeadroom: Float
+        val thermalHeadroom: Float,
+        val searchCooldownSeconds: Int
     )
 
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
@@ -88,11 +89,11 @@ class ThermalDutyManager(
         }
         val effectiveStatus = max(status, headroomStatus)
         return when {
-            effectiveStatus >= PowerManager.THERMAL_STATUS_CRITICAL -> Policy(true, false, false, 5, "तापमान बहुत अधिक है, केवल सुरक्षा मोड", effectiveStatus, headroom)
-            effectiveStatus >= PowerManager.THERMAL_STATUS_SEVERE -> Policy(true, tier != CapabilityTier.BASIC, false, 10, "फोन बहुत गर्म है, स्टोरीटेलर रोक दिया गया", effectiveStatus, headroom)
-            effectiveStatus >= PowerManager.THERMAL_STATUS_MODERATE -> Policy(true, tier != CapabilityTier.BASIC, false, 15, "फोन गर्म है, कम ऊर्जा मोड सक्रिय है", effectiveStatus, headroom)
-            effectiveStatus >= PowerManager.THERMAL_STATUS_LIGHT -> Policy(true, tier != CapabilityTier.BASIC, false, 20, "तापमान बढ़ रहा है, हल्का मोड सक्रिय है", effectiveStatus, headroom)
-            else -> Policy(true, tier != CapabilityTier.BASIC, tier == CapabilityTier.ENHANCED, 30, "सामान्य ऑफलाइन मोड", effectiveStatus, headroom)
+                        effectiveStatus >= PowerManager.THERMAL_STATUS_CRITICAL -> Policy(true, false, false, 5, "तापमान बहुत अधिक है, सुरक्षा चालू है; वस्तु खोज थोड़ी देर बाद उपलब्ध होगी", effectiveStatus, headroom, 30)
+            effectiveStatus >= PowerManager.THERMAL_STATUS_SEVERE -> Policy(true, tier != CapabilityTier.BASIC, false, 10, "फोन बहुत गर्म है, स्टोरीटेलर रुका है; सुरक्षा चालू है", effectiveStatus, headroom, 15)
+            effectiveStatus >= PowerManager.THERMAL_STATUS_MODERATE -> Policy(true, tier != CapabilityTier.BASIC, false, 15, "फोन गर्म है, कम ऊर्जा मोड सक्रिय है", effectiveStatus, headroom, 8)
+            effectiveStatus >= PowerManager.THERMAL_STATUS_LIGHT -> Policy(true, tier != CapabilityTier.BASIC, false, 20, "तापमान बढ़ रहा है, हल्का मोड सक्रिय है", effectiveStatus, headroom, 5)
+            else -> Policy(true, tier != CapabilityTier.BASIC, tier == CapabilityTier.ENHANCED, 30, "सामान्य ऑफलाइन मोड", effectiveStatus, headroom, 2)
         }
     }
 
