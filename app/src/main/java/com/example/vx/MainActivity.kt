@@ -327,17 +327,39 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private fun startCameraPipeline() {
         if (cameraPipelineStarted || !hasCameraPermission()) return
         cameraPipelineStarted = true
-        surface.onResume()
-        motionManager.start()
-        thermalDutyManager.start()
-        arManager.resume()
-        renderLoopRunning = true
+        try {
+            surface.onResume()
+            motionManager.start()
+            thermalDutyManager.start()
+            arManager.resume()
+            renderLoopRunning = true
+            renderHandler.removeCallbacks(renderRunnable)
+            renderHandler.removeCallbacks(safetyWatchdogRunnable)
+            lastSafetySnapshotNs = System.nanoTime()
+            watchdogAlerted = false
+            renderHandler.post(renderRunnable)
+            renderHandler.postDelayed(safetyWatchdogRunnable, SAFETY_WATCHDOG_PERIOD_MS)
+        } catch (error: SecurityException) {
+            Log.e("MainActivity", "Camera permission changed during startup", error)
+            stopCameraPipelineAfterFailure("कैमरा अनुमति बदल गई, सुरक्षा शुरू नहीं हो सकी")
+        } catch (error: RuntimeException) {
+            Log.e("MainActivity", "Camera pipeline startup failed", error)
+            stopCameraPipelineAfterFailure("कैमरा शुरू नहीं हो सका, कृपया अनुमति जांचें")
+        }
+    }
+
+    private fun stopCameraPipelineAfterFailure(messageHindi: String) {
+        cameraPipelineStarted = false
+        renderLoopRunning = false
         renderHandler.removeCallbacks(renderRunnable)
         renderHandler.removeCallbacks(safetyWatchdogRunnable)
-        lastSafetySnapshotNs = System.nanoTime()
-        watchdogAlerted = false
-        renderHandler.post(renderRunnable)
-        renderHandler.postDelayed(safetyWatchdogRunnable, SAFETY_WATCHDOG_PERIOD_MS)
+        runCatching { thermalDutyManager.stop() }
+        runCatching { motionManager.stop() }
+        runCatching { surface.onPause() }
+        runOnUiThread {
+            statusTextView.text = messageHindi
+            alerts.speakSearch(messageHindi)
+        }
     }
 
     override fun onPause() {

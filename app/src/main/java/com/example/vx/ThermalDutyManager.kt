@@ -3,6 +3,7 @@ package com.example.vx
 import android.content.Context
 import android.os.Build
 import android.os.PowerManager
+import android.util.Log
 import kotlin.math.max
 
 /** Thermal policy for expensive semantic workloads; safety is never disabled. */
@@ -25,6 +26,7 @@ class ThermalDutyManager(
     @Volatile private var thermalHeadroom = Float.NaN
     @Volatile private var cachedPolicy = makePolicy(currentStatus, thermalHeadroom)
     private var lastHeadroomCheckNanos = 0L
+    @Volatile private var listenerRegistered = false
     private val listener = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
         PowerManager.OnThermalStatusChangedListener { status ->
             currentStatus = status
@@ -34,18 +36,27 @@ class ThermalDutyManager(
         null
     }
 
+    @Synchronized
     fun start() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && listener != null) {
-            powerManager.addThermalStatusListener(listener)
-            currentStatus = powerManager.currentThermalStatus
-            cachedPolicy = makePolicy(currentStatus, thermalHeadroom)
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || listenerRegistered) return
+        val thermalListener = listener ?: return
+        runCatching {
+            powerManager.addThermalStatusListener(thermalListener)
+            listenerRegistered = true
+        }.onFailure { error ->
+            Log.w("ThermalDuty", "Thermal listener registration failed", error)
         }
+        currentStatus = powerManager.currentThermalStatus
+        cachedPolicy = makePolicy(currentStatus, thermalHeadroom)
     }
 
+    @Synchronized
     fun stop() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && listener != null) {
-            powerManager.removeThermalStatusListener(listener)
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q || !listenerRegistered) return
+        val thermalListener = listener ?: return
+        runCatching { powerManager.removeThermalStatusListener(thermalListener) }
+            .onFailure { error -> Log.w("ThermalDuty", "Thermal listener removal failed", error) }
+        listenerRegistered = false
     }
 
     fun policy(): Policy {
