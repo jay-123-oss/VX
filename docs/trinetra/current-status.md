@@ -20,7 +20,8 @@
 - The detector keeps a CPU baseline and exposes optional NNAPI with `CPU_DISABLED`; failed or unsupported NNAPI setup falls back to CPU. A developer-only provider benchmark API and usage guide are included. NNAPI is not required for safety and is treated as optional because Android 15 deprecates it.
 - Thermal policy now combines thermal status with `getThermalHeadroom(10)` sampled at the documented 10-second cadence. A light thermal tier reduces optional workloads before severe throttling while preserving the Reflex Shield loop.
 - Unit tests now cover saturated far depth as unreliable and mixed valid/saturated samples as usable when a nearby reliable surface exists. The debug APK was rebuilt successfully after these changes.
-- The approved Storyteller design is documented separately. The recommended first runtime boundary is LiteRT-LM behind a `StorytellerEngine` adapter, with Gemma 3n E2B limited to Enhanced-tier benchmarking and SmolVLM-256M retained only as a lower-memory experiment. No VLM is bundled or connected yet; the closed result schema, expiry rules, conservative fusion policy, and physical-device acceptance gates are defined before implementation.
+- The approved Storyteller design is documented separately. The recommended first runtime boundary is LiteRT-LM behind a `StorytellerEngine` adapter, with Gemma 3n E2B limited to Enhanced-tier benchmarking and SmolVLM-256M retained only as a lower-memory experiment. No VLM model is bundled or invoked yet.
+- The model-independent Storyteller foundation now includes a closed hazard/severity/region result schema, confidence and expiry validation, a one-frame latest-image store with replacement instead of queueing, a disabled fallback engine, lifecycle-safe close behavior, and JVM unit tests. It cannot raise a VLM-only emergency and cannot downgrade Reflex Shield safety.
 
 ## Deliberate boundaries in this milestone
 

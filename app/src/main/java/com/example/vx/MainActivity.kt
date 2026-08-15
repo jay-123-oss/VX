@@ -32,6 +32,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var motionManager: SensorMotionManager
     private lateinit var negativeObstacleDetectors: Array<NegativeObstacleDetector>
     private lateinit var thermalDutyManager: ThermalDutyManager
+    private lateinit var storytellerEngine: StorytellerEngine
     private val safetyCorridorXs = floatArrayOf(0.35f, 0.50f, 0.65f)
     private val groundProfileYs = floatArrayOf(0.64f, 0.74f, 0.84f, 0.94f)
     private val groundProfileBuffers = Array(safetyCorridorXs.size) { IntArray(groundProfileYs.size) }
@@ -74,6 +75,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         arManager = ARCoreVisionManager(this)
         objectDetector = OnnxObjectDetector(this)
+        storytellerEngine = UnavailableStorytellerEngine()
         alerts = AlertEngine(this)
 
         findViewById<android.widget.Button>(R.id.searchButton).setOnClickListener {
@@ -83,10 +85,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
 
         findViewById<android.widget.Button>(R.id.vlmButton).setOnClickListener {
-            val message = when (deviceProfile.tier) {
-                CapabilityTier.ENHANCED -> "स्थानीय स्टोरीटेलर मॉडल तैयार होने पर दृश्य का वर्णन मिलेगा"
-                CapabilityTier.STANDARD -> "इस फोन पर दृश्य विश्लेषण कम ऊर्जा मोड में उपलब्ध होगा"
-                CapabilityTier.BASIC -> "इस फोन पर अभी सुरक्षा मोड सक्रिय है"
+            val message = if (!storytellerEngine.isAvailable) {
+                storytellerEngine.unavailableReasonHindi
+            } else {
+                when (deviceProfile.tier) {
+                    CapabilityTier.ENHANCED -> "स्थानीय स्टोरीटेलर दृश्य विश्लेषण उपलब्ध है"
+                    CapabilityTier.STANDARD -> "इस फोन पर दृश्य विश्लेषण कम ऊर्जा मोड में उपलब्ध है"
+                    CapabilityTier.BASIC -> "इस फोन पर अभी सुरक्षा मोड सक्रिय है"
+                }
             }
             alerts.speakSearch(message)
             statusTextView.text = message
@@ -324,6 +330,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         perceptionExecutor.shutdownNow()
         arManager.shutdown()
         objectDetector.close()
+        storytellerEngine.close()
         alerts.release()
     }
 
