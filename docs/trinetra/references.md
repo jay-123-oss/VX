@@ -63,3 +63,11 @@ Key points used in the Cloud Agent design: use HTTPS/TLS, keep cleartext traffic
 [16] Android Permissions Overview and Best Practices: https://developer.android.com/guide/topics/permissions/overview
 
 Key points used in the Cloud Agent design: request the minimum permissions, associate sensitive access with an explicit user action, be transparent about camera/microphone use, and minimize data shared for each task.
+
+[17] OWASP API Security Top 10 2023: https://owasp.org/API-Security/editions/2023/en/0x11-t10/
+
+Key points used in the relay design: protect authentication and object/function authorization, bound resource consumption, avoid security misconfiguration, validate third-party API responses, and prevent SSRF when the server contacts a provider.
+
+[18] OWASP REST Security Cheat Sheet: https://cheatsheetseries.owasp.org/cheatsheets/REST_Security_Cheat_Sheet.html
+
+Key points used in the relay design: expose HTTPS only, validate JWT issuer/audience/expiry if JWTs are used, apply endpoint authorization, allowlist HTTP methods and content types, enforce request-size limits, use semantic status codes such as 413/415/429, avoid secrets in URLs, return generic errors, and use no-store responses where sensitive data may be cached.

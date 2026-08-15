@@ -25,6 +25,7 @@
 - The Phase 1/2 audit found and fixed a negative-obstacle edge case: saturated far profile samples such as 7,867 mm are now rejected as unknown ground instead of being interpreted as a pothole/drop. The regression is covered by a JVM test. The audit report records static verification and remaining physical-device gates.
 - LiteRT-LM Android 0.16.0 is now declared as a dependency, with a non-enabled CPU/GPU/NPU `LiteRtLmStorytellerEngine` adapter and Enhanced-tier benchmark harness. No model path is supplied by MainActivity and no VLM model is bundled; the existing Storyteller button remains an unavailable fallback.
 - Phase 3 Cloud Agent architecture is documented as an optional, user-consented online assistant. A model-independent `CloudAssistantGateway` contract, offline fallback, consent/network/thermal policy, bounded request schema, HTTPS relay client, response expiry checks, and cloud safety-authority rejection tests are now present. No provider endpoint, API key, continuous upload, or cloud-controlled safety decision is configured.
+- Phase 4 now includes a provider-neutral HTTPS relay contract and local FastAPI reference validator under `relay/`. It enforces a short-lived bearer-token boundary, strict JSON/schema/TTL/image limits, replay protection, rate limiting, generic error responses, no provider by default, and `safety_authority: none`. The reference relay has five passing contract tests and is not deployed or connected to a provider.
 
 ## Deliberate boundaries in this milestone
 
