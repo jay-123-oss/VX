@@ -1,12 +1,15 @@
 package com.example.vx
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.media.Image
 import android.util.Log
 import com.google.ar.core.Config
 import com.google.ar.core.Frame
 import com.google.ar.core.Session
 import com.google.ar.core.TrackingState
+import androidx.core.content.ContextCompat
 import com.google.ar.core.exceptions.NotYetAvailableException
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -26,6 +29,10 @@ class ARCoreVisionManager(private val context: Context) {
 
     @Synchronized
     fun createIfNeeded(): Session? {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            Log.w("ARCoreVision", "Camera permission is not granted; session creation skipped")
+            return null
+        }
         if (session != null) return session
         return runCatching {
             Session(context).also { created ->

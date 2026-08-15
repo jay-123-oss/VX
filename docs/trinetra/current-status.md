@@ -9,6 +9,7 @@
 - SafetyDecisionEngine tests cover unknown tracking, stable distance, fast approach/TTC, and negative-obstacle confirmation.
 - The app includes three-column lower-scene sampling for possible drop-offs, a five-by-four multi-point depth corridor for nearest reliable obstacle distance, filtered IMU motion state, thermal-aware frame-rate policy, Hindi TTS, haptic priority feedback, and audible stereo left/right beep fallback.
 - Reliable clear space is shown with green status and measured distance; a reliable nearby surface is shown as a Hindi obstacle with measured distance and warning color/feedback; unknown depth never becomes green.
+- Camera permission is now checked before both Activity startup and ARCore session creation. If permission is denied or revoked, the app remains open with a Hindi explanation instead of crashing during `onResume()`.
 
 ## Deliberate boundaries in this milestone
 

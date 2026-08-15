@@ -34,6 +34,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var previousDistanceMeters: Float? = null
     private var previousDistanceTimeNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
+    private var cameraPipelineStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -190,6 +191,36 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onResume() {
         super.onResume()
+        if (!hasCameraPermission()) {
+            cameraPipelineStarted = false
+            statusTextView.text = "कैमरा अनुमति आवश्यक है"
+            return
+        }
+        startCameraPipeline()
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != CAMERA_PERMISSION_REQUEST) return
+        if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            statusTextView.text = "कैमरा अनुमति मिल गई, सुरक्षा शुरू हो रही है"
+            startCameraPipeline()
+        } else {
+            cameraPipelineStarted = false
+            statusTextView.text = "कैमरा अनुमति नहीं मिली, ऐप सुरक्षा जांच नहीं कर सकता"
+        }
+    }
+
+    private fun hasCameraPermission(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+
+    private fun startCameraPipeline() {
+        if (cameraPipelineStarted || !hasCameraPermission()) return
+        cameraPipelineStarted = true
         surface.onResume()
         motionManager.start()
         thermalDutyManager.start()
@@ -198,6 +229,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onPause() {
         super.onPause()
+        cameraPipelineStarted = false
         surface.onPause()
         motionManager.stop()
         thermalDutyManager.stop()
@@ -218,5 +250,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         arManager.shutdown()
         yolo.close()
         alerts.release()
+    }
+
+    companion object {
+        private const val CAMERA_PERMISSION_REQUEST = 101
     }
 }
