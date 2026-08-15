@@ -20,6 +20,7 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
     private val soundPool: SoundPool
+    private val spatialBeep = SpatialBeepPlayer()
     private var ttsReady = false
     private var lastVibrateTime = 0L
     private var lastState = SafetyState.CAUTION
@@ -111,7 +112,12 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
         val intensity = ((2000f - distanceMm) / 2000f).coerceIn(0.15f, 1f)
         val leftVol = if (xPos < 0) 1f else 1f - xPos.coerceIn(0f, 1f)
         val rightVol = if (xPos > 0) 1f else 1f + xPos.coerceIn(-1f, 0f)
-        // Audio asset is optional until final beep samples are selected.
+        val frequency = when {
+            distanceMm <= 500 -> 880.0
+            distanceMm <= 1000 -> 660.0
+            else -> 440.0
+        }
+        spatialBeep.play(leftVol * intensity, rightVol * intensity, frequency, 110)
         Log.v("AlertEngine", "Beep left=$leftVol right=$rightVol intensity=$intensity")
     }
 
@@ -119,5 +125,6 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
         tts.stop()
         tts.shutdown()
         soundPool.release()
+        spatialBeep.release()
     }
 }

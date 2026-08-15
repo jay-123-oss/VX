@@ -6,6 +6,7 @@ import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Bundle
 import android.util.Log
+import com.google.ar.core.TrackingState
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -24,6 +25,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var statusTextView: android.widget.TextView
     private lateinit var safetyEngine: SafetyDecisionEngine
     private lateinit var deviceProfile: DeviceProfile
+    private lateinit var motionManager: SensorMotionManager
+    private lateinit var negativeObstacleDetectors: Array<NegativeObstacleDetector>
+    private lateinit var thermalDutyManager: ThermalDutyManager
+    private val safetyCorridorXs = floatArrayOf(0.35f, 0.50f, 0.65f)
+    private val groundProfileYs = floatArrayOf(0.64f, 0.74f, 0.84f, 0.94f)
+    private var previousDistanceMeters: Float? = null
+    private var previousDistanceTimeNs: Long = 0L
+    private var lastSafetyLogNs: Long = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,6 +45,9 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         safetyEngine = SafetyDecisionEngine()
         deviceProfile = DeviceCapabilityDetector(this).detect()
         statusTextView.text = deviceProfile.messageHindi
+        motionManager = SensorMotionManager(this)
+        negativeObstacleDetectors = Array(safetyCorridorXs.size) { NegativeObstacleDetector() }
+        thermalDutyManager = ThermalDutyManager(this, deviceProfile.tier)
 
         arManager = ARCoreVisionManager(this)
         yolo = YoloDetector(this)
@@ -62,8 +74,38 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
-        val session = arManager.resume() ?: return
-        val frame = try { session.update() } catch (e: Exception) { return }
+        val session = arManager.currentSession() ?: return
+        val frame = try {
+            session.update()
+        } catch (error: Exception) {
+            Log.e("MainActivity", "ARCore frame update failed", error)
+            return
+        }
+
+        val thermalPolicy = thermalDutyManager.policy()
+        val targetFps = if (motionManager.currentState() == SensorMotionManager.State.STILL) {
+            5
+        } else {
+            thermalPolicy.cameraFps
+        }
+        arManager.setTargetFps(targetFps)
+
+        if (frame.camera.trackingState != TrackingState.TRACKING) {
+            runOnUiThread {
+                val unknown = SafetySnapshot(
+                    state = SafetyState.CAUTION,
+                    distanceMeters = null,
+                    confidence = 0f,
+                    timeToCollisionSeconds = null,
+                    trackingReliable = false,
+                    messageHindi = "कैमरा/डेप्थ स्पष्ट नहीं है, रुकें"
+                )
+                alerts.processSnapshot(unknown, 0f)
+                overlay.updateSnapshot(unknown)
+                statusTextView.text = unknown.messageHindi
+            }
+            return
+        }
 
         arManager.onFrame(frame) { camImage, depthImage ->
             lifecycleScope.launch(Dispatchers.Default) {
@@ -75,12 +117,40 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     val distanceMm = depthImage?.let {
                         DepthFusionMath.getAverageDepth(normX, normY, it)
                     } ?: 0
+                    val distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f)
                     val hasReliableDepth = depthImage != null && distanceMm > 0
+                    val nowNs = System.nanoTime()
+                    val deltaSeconds = if (previousDistanceTimeNs > 0L) {
+                        (nowNs - previousDistanceTimeNs) / 1_000_000_000f
+                    } else 0f
+                    val relativeApproach = if (distanceMeters != null && previousDistanceMeters != null && deltaSeconds > 0f) {
+                        ((previousDistanceMeters!! - distanceMeters) / deltaSeconds).coerceAtLeast(0f)
+                    } else null
+                    if (distanceMeters != null) previousDistanceMeters = distanceMeters
+                    previousDistanceTimeNs = nowNs
+
+                    var dropDetected = false
+                    var unknownGround = false
+                    if (depthImage != null) {
+                        for (index in safetyCorridorXs.indices) {
+                            val profile = DepthFusionMath.sampleVerticalProfile(
+                                depthImage = depthImage,
+                                normX = safetyCorridorXs[index],
+                                normalizedYs = groundProfileYs
+                            )
+                            val assessment = negativeObstacleDetectors[index].assess(profile)
+                            dropDetected = dropDetected || assessment.dropDetected
+                            unknownGround = unknownGround || assessment.unknownGround
+                        }
+                    }
+                    val cameraBlockedWhileMoving = !hasReliableDepth && motionManager.isMoving()
                     val snapshot = safetyEngine.evaluate(
-                        distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f),
-                        relativeApproachMetersPerSecond = null,
+                        distanceMeters = distanceMeters,
+                        relativeApproachMetersPerSecond = relativeApproach,
                         confidence = if (hasReliableDepth) 0.85f else 0f,
-                        trackingReliable = hasReliableDepth
+                        trackingReliable = hasReliableDepth,
+                        negativeDropOff = dropDetected,
+                        cameraBlockedWhileMoving = cameraBlockedWhileMoving
                     )
 
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
@@ -88,6 +158,13 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     runOnUiThread {
                         overlay.updateSnapshot(snapshot)
                         statusTextView.text = snapshot.messageHindi
+                    }
+                    if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
+                        Log.i(
+                            "ReflexShield",
+                            "tracking=${hasReliableDepth} depthMm=$distanceMm drop=$dropDetected unknownGround=$unknownGround motion=${motionManager.currentState()} fps=$targetFps"
+                        )
+                        lastSafetyLogNs = nowNs
                     }
 
                 } finally {
@@ -103,23 +180,27 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         val textures = IntArray(1)
         GLES20.glGenTextures(1, textures, 0)
-        arManager.resume()?.setCameraTextureName(textures[0])
+        arManager.setCameraTextureName(textures[0])
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
         GLES20.glViewport(0, 0, w, h)
-        arManager.resume()?.setDisplayGeometry(0, w, h)
+        arManager.setDisplayGeometry(0, w, h)
     }
 
     override fun onResume() {
         super.onResume()
         surface.onResume()
+        motionManager.start()
+        thermalDutyManager.start()
         arManager.resume()
     }
 
     override fun onPause() {
         super.onPause()
         surface.onPause()
+        motionManager.stop()
+        thermalDutyManager.stop()
         arManager.pause()
     }
 

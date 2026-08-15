@@ -57,8 +57,30 @@ class SafetyDecisionEngine {
         distanceMeters: Float?,
         relativeApproachMetersPerSecond: Float?,
         confidence: Float,
-        trackingReliable: Boolean
+        trackingReliable: Boolean,
+        negativeDropOff: Boolean = false,
+        cameraBlockedWhileMoving: Boolean = false
     ): SafetySnapshot {
+        if (negativeDropOff) {
+            return SafetySnapshot(
+                state = SafetyState.EMERGENCY,
+                distanceMeters = distanceMeters,
+                confidence = confidence,
+                timeToCollisionSeconds = null,
+                trackingReliable = trackingReliable,
+                messageHindi = "आगे गड्ढा या नीचे उतरती सीढ़ी हो सकती है, तुरंत रुकें"
+            )
+        }
+        if (cameraBlockedWhileMoving) {
+            return SafetySnapshot(
+                state = SafetyState.CAUTION,
+                distanceMeters = distanceMeters,
+                confidence = confidence,
+                timeToCollisionSeconds = null,
+                trackingReliable = false,
+                messageHindi = "कैमरा स्पष्ट नहीं है, चलते समय रुकें"
+            )
+        }
         if (!trackingReliable || distanceMeters == null || confidence < 0.55f) {
             return SafetySnapshot(
                 state = SafetyState.CAUTION,

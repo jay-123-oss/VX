@@ -32,6 +32,16 @@ The app selects a tier at runtime rather than assuming that a RAM/storage thresh
 | Standard | At least 4 GB RAM and ARCore availability | Safety, controlled search, reduced context workload |
 | Enhanced | Higher memory, ARCore Depth, and validated model assets | Safety, search, and low-frequency Storyteller |
 
+## Additional safety requirements
+
+Negative obstacles are handled as a separate ground-profile signal. The Reflex Shield samples a bounded three-column corridor over the lower scene, estimates the expected depth rise along the ground, and requires temporal confirmation before escalating a likely pothole or downward stair to Emergency. Missing ground data remains Unknown/Caution rather than Clear.
+
+An IMU motion manager uses filtered linear acceleration to classify the device as moving, still, or unknown. It does not claim to detect obstacles by itself. Its purpose is to make camera/depth failure more conservative while moving and to reduce expensive semantic workloads while still. The safety watchdog remains active in every motion state.
+
+Audio feedback has a local stereo PCM fallback for left/right directional cues. Android Spatializer support can be added as an enhancement, but emergency feedback continues to use vibration and central audible cues so it does not depend on a particular earbud or device implementation.
+
+Thermal policy reduces camera processing rate and suspends Storyteller/Search under thermal pressure while keeping Reflex Shield active. ONNX Runtime NNAPI/XNNPACK selection must be benchmarked per device; NNAPI does not guarantee NPU execution and unsupported operators may fall back to CPU.
+
 ## Testing gates
 
-Before release, test with network disabled and measure safety alert latency, depth confidence transitions, false alarms, missed obstacles, TTS latency, VLM latency, FPS, RAM, battery, and temperature. Test at least daylight, low light, crowds, stairs, glass, textureless walls, parked two-wheelers, and moving obstacles.
+Before release, test with network disabled and measure safety alert latency, depth confidence transitions, false alarms, missed obstacles, negative-obstacle precision/recall, camera-blocked detection, TTS latency, directional beep latency, VLM latency, FPS, RAM, battery, and temperature. Test at least daylight, low light, crowds, stairs up and down, potholes, glass, textureless walls, parked two-wheelers, and moving obstacles.
