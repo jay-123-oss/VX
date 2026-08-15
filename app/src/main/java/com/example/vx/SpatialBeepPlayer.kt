@@ -1,59 +1,60 @@
 package com.example.vx
 
+import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioFormat
-import android.media.AudioTrack
-import kotlin.math.PI
-import kotlin.math.sin
+import android.media.SoundPool
+import android.util.SparseIntArray
 
 /**
- * Generates short stereo PCM cues locally. Left/right gain provides a dependable fallback when
- * the device does not expose Android Spatializer or the user has no spatial-audio earbuds.
+ * Low-latency reusable alert player. Preloaded short clips avoid per-alert PCM generation and
+ * continuous AudioTrack writes, which were producing underruns in the runtime log.
  */
-class SpatialBeepPlayer {
-    private val sampleRate = 44_100
-    private val track: AudioTrack = AudioTrack.Builder()
-        .setAudioAttributes(
-            AudioAttributes.Builder()
-                .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                .build()
-        )
-        .setAudioFormat(
-            AudioFormat.Builder()
-                .setSampleRate(sampleRate)
-                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
-                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
-                .build()
-        )
-        .setBufferSizeInBytes(sampleRate * 2 * 2 / 5)
-        .setTransferMode(AudioTrack.MODE_STREAM)
-        .build()
+class SpatialBeepPlayer(context: Context) {
+    private val soundPool: SoundPool
+    private val soundIds = SparseIntArray(3)
+    @Volatile private var loadedCount = 0
+    @Volatile private var released = false
 
-    private val stereoBuffer = ShortArray(sampleRate * 2 / 5)
-
-    @Synchronized
-    fun play(leftGain: Float, rightGain: Float, frequencyHz: Double, durationMs: Int) {
-        val frames = (sampleRate * durationMs / 1000).coerceIn(1, stereoBuffer.size / 2)
-        val safeLeft = leftGain.coerceIn(0f, 1f)
-        val safeRight = rightGain.coerceIn(0f, 1f)
-        val fadeFrames = (sampleRate * 0.012).toInt().coerceAtLeast(1)
-        for (frame in 0 until frames) {
-            val envelope = when {
-                frame < fadeFrames -> frame.toFloat() / fadeFrames
-                frame >= frames - fadeFrames -> (frames - frame).toFloat() / fadeFrames
-                else -> 1f
-            }.coerceIn(0f, 1f)
-            val wave = sin(2.0 * PI * frequencyHz * frame / sampleRate).toFloat()
-            stereoBuffer[frame * 2] = (wave * safeLeft * envelope * Short.MAX_VALUE * 0.45f).toInt().toShort()
-            stereoBuffer[frame * 2 + 1] = (wave * safeRight * envelope * Short.MAX_VALUE * 0.45f).toInt().toShort()
+    init {
+        val attributes = AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
+        soundPool = SoundPool.Builder()
+            .setMaxStreams(2)
+            .setAudioAttributes(attributes)
+            .build()
+        soundPool.setOnLoadCompleteListener { _, _, status ->
+            if (status == 0) loadedCount++
         }
-        track.play()
-        track.write(stereoBuffer, 0, frames * 2)
+        soundIds.put(BEEP_LOW, soundPool.load(context, R.raw.beep_low, 1))
+        soundIds.put(BEEP_MID, soundPool.load(context, R.raw.beep_mid, 1))
+        soundIds.put(BEEP_HIGH, soundPool.load(context, R.raw.beep_high, 1))
+    }
+
+    fun play(leftGain: Float, rightGain: Float, frequencyHz: Double, durationMs: Int = 140) {
+        if (released || loadedCount < 1) return
+        val clip = when {
+            frequencyHz >= 820.0 -> BEEP_HIGH
+            frequencyHz >= 560.0 -> BEEP_MID
+            else -> BEEP_LOW
+        }
+        val sampleId = soundIds.get(clip, 0)
+        if (sampleId == 0) return
+        val left = leftGain.coerceIn(0f, 1f)
+        val right = rightGain.coerceIn(0f, 1f)
+        soundPool.play(sampleId, left, right, 1, 0, 1f)
     }
 
     fun release() {
-        track.stop()
-        track.release()
+        if (released) return
+        released = true
+        soundPool.release()
+    }
+
+    companion object {
+        private const val BEEP_LOW = 1
+        private const val BEEP_MID = 2
+        private const val BEEP_HIGH = 3
     }
 }

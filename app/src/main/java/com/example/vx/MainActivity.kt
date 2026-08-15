@@ -32,6 +32,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var thermalDutyManager: ThermalDutyManager
     private val safetyCorridorXs = floatArrayOf(0.35f, 0.50f, 0.65f)
     private val groundProfileYs = floatArrayOf(0.64f, 0.74f, 0.84f, 0.94f)
+    private val groundProfileBuffers = Array(safetyCorridorXs.size) { IntArray(groundProfileYs.size) }
+    private var lastAppliedFps = -1
     private var previousDistanceMeters: Float? = null
     private var previousDistanceTimeNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
@@ -96,12 +98,13 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         val planeAssessment = planeGroundAnalyzer.assess(frame)
         val thermalPolicy = thermalDutyManager.policy()
-        val targetFps = if (motionManager.currentState() == SensorMotionManager.State.STILL) {
-            5
-        } else {
-            thermalPolicy.cameraFps
+        val motionFps = motionManager.recommendedFps()
+        val targetFps = minOf(motionFps, thermalPolicy.cameraFps)
+        if (targetFps != lastAppliedFps) {
+            arManager.setTargetFps(targetFps)
+            lastAppliedFps = targetFps
+            Log.i("WorkloadPolicy", "Applied camera FPS=$targetFps motion=${motionManager.currentState()} thermal=${thermalPolicy.cameraFps}")
         }
-        arManager.setTargetFps(targetFps)
 
         if (frame.camera.trackingState != TrackingState.TRACKING) {
             runOnUiThread {
@@ -126,7 +129,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     // Safety remains independent from YOLO and VLM. Unknown depth is caution,
                     // never a simulated clear path.
                     val normX = 0.5f
-                    val corridorResult = depthImage?.let { corridorAnalyzer.analyze(it) }
+                    val depthSampler = depthImage?.let { DepthFusionMath.Sampler(it) }
+                    val corridorResult = depthSampler?.let { corridorAnalyzer.analyze(it) }
                     val distanceMm = corridorResult?.nearestDepthMm ?: 0
                     val distanceMeters = distanceMm.takeIf { it > 0 }?.div(1000f)
                     val hasReliableDepth = corridorResult?.reliable == true
@@ -144,10 +148,11 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     var unknownGround = false
                     if (depthImage != null) {
                         for (index in safetyCorridorXs.indices) {
-                            val profile = DepthFusionMath.sampleVerticalProfile(
-                                depthImage = depthImage,
+                            val profile = groundProfileBuffers[index]
+                            depthSampler?.fillVerticalProfile(
                                 normX = safetyCorridorXs[index],
-                                normalizedYs = groundProfileYs
+                                normalizedYs = groundProfileYs,
+                                output = profile
                             )
                             val assessment = negativeObstacleDetectors[index].assess(
                                 profileMillimeters = profile,
@@ -181,9 +186,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                             val searchMessage = if (best == null) {
                                 "वस्तु नहीं मिली"
                             } else {
-                                val objectDistanceMm = depthImage?.let {
-                                    DepthFusionMath.getAverageDepth(best.centerX, best.centerY, it)
-                                } ?: 0
+                                val objectDistanceMm = depthSampler?.getAverageDepth(best.centerX, best.centerY) ?: 0
                                 val distanceText = if (objectDistanceMm > 0) {
                                     String.format(java.util.Locale.US, "%.1f मीटर", objectDistanceMm / 1000f)
                                 } else {

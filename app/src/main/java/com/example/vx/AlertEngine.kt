@@ -1,8 +1,6 @@
 package com.example.vx
 
 import android.content.Context
-import android.media.AudioAttributes
-import android.media.SoundPool
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -19,21 +17,12 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
         @Suppress("DEPRECATION")
         context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
     }
-    private val soundPool: SoundPool
-    private val spatialBeep = SpatialBeepPlayer()
+    private val spatialBeep = SpatialBeepPlayer(context.applicationContext)
     private var ttsReady = false
     private var lastVibrateTime = 0L
     private var lastSpokenTime = 0L
     private var lastState = SafetyState.CAUTION
     private val tts = TextToSpeech(context.applicationContext, this)
-
-    init {
-        val attr = AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
-            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-            .build()
-        soundPool = SoundPool.Builder().setMaxStreams(3).setAudioAttributes(attr).build()
-    }
 
     override fun onInit(status: Int) {
         ttsReady = status == TextToSpeech.SUCCESS
@@ -136,7 +125,6 @@ class AlertEngine(private val context: Context) : TextToSpeech.OnInitListener {
     fun release() {
         tts.stop()
         tts.shutdown()
-        soundPool.release()
         spatialBeep.release()
     }
 }

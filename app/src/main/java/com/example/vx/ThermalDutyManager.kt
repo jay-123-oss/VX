@@ -18,9 +18,13 @@ class ThermalDutyManager(
     )
 
     private val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    private var currentStatus = PowerManager.THERMAL_STATUS_NONE
+    @Volatile private var currentStatus = PowerManager.THERMAL_STATUS_NONE
+    @Volatile private var cachedPolicy = makePolicy(currentStatus)
     private val listener = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-        PowerManager.OnThermalStatusChangedListener { status -> currentStatus = status }
+        PowerManager.OnThermalStatusChangedListener { status ->
+            currentStatus = status
+            cachedPolicy = makePolicy(status)
+        }
     } else {
         null
     }
@@ -29,6 +33,7 @@ class ThermalDutyManager(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && listener != null) {
             powerManager.addThermalStatusListener(listener)
             currentStatus = powerManager.currentThermalStatus
+            cachedPolicy = makePolicy(currentStatus)
         }
     }
 
@@ -38,33 +43,32 @@ class ThermalDutyManager(
         }
     }
 
-    fun policy(): Policy {
-        val status = currentStatus
-        return when {
-            status >= PowerManager.THERMAL_STATUS_CRITICAL -> Policy(
-                runSearch = false,
-                runStoryteller = false,
-                cameraFps = 5,
-                messageHindi = "तापमान बहुत अधिक है, केवल सुरक्षा मोड"
-            )
-            status >= PowerManager.THERMAL_STATUS_SEVERE -> Policy(
-                runSearch = tier != CapabilityTier.BASIC,
-                runStoryteller = false,
-                cameraFps = 10,
-                messageHindi = "फोन गर्म है, स्टोरीटेलर रोक दिया गया"
-            )
-            status >= PowerManager.THERMAL_STATUS_MODERATE -> Policy(
-                runSearch = tier != CapabilityTier.BASIC,
-                runStoryteller = tier == CapabilityTier.ENHANCED,
-                cameraFps = 15,
-                messageHindi = "कम ऊर्जा मोड सक्रिय है"
-            )
-            else -> Policy(
-                runSearch = tier != CapabilityTier.BASIC,
-                runStoryteller = tier == CapabilityTier.ENHANCED,
-                cameraFps = 30,
-                messageHindi = "सामान्य ऑफलाइन मोड"
-            )
-        }
+    fun policy(): Policy = cachedPolicy
+
+    private fun makePolicy(status: Int): Policy = when {
+        status >= PowerManager.THERMAL_STATUS_CRITICAL -> Policy(
+            runSearch = false,
+            runStoryteller = false,
+            cameraFps = 5,
+            messageHindi = "तापमान बहुत अधिक है, केवल सुरक्षा मोड"
+        )
+        status >= PowerManager.THERMAL_STATUS_SEVERE -> Policy(
+            runSearch = tier != CapabilityTier.BASIC,
+            runStoryteller = false,
+            cameraFps = 10,
+            messageHindi = "फोन गर्म है, स्टोरीटेलर रोक दिया गया"
+        )
+        status >= PowerManager.THERMAL_STATUS_MODERATE -> Policy(
+            runSearch = tier != CapabilityTier.BASIC,
+            runStoryteller = tier == CapabilityTier.ENHANCED,
+            cameraFps = 15,
+            messageHindi = "कम ऊर्जा मोड सक्रिय है"
+        )
+        else -> Policy(
+            runSearch = tier != CapabilityTier.BASIC,
+            runStoryteller = tier == CapabilityTier.ENHANCED,
+            cameraFps = 30,
+            messageHindi = "सामान्य ऑफलाइन मोड"
+        )
     }
 }

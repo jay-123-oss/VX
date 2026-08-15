@@ -21,11 +21,13 @@ class DepthCorridorAnalyzer {
 
     private val sampleBuffer = IntArray(SAMPLE_XS.size * SAMPLE_YS.size)
 
-    fun analyze(depthImage: Image): Result {
+    fun analyze(depthImage: Image): Result = analyze(DepthFusionMath.Sampler(depthImage))
+
+    fun analyze(sampler: DepthFusionMath.Sampler): Result {
         var count = 0
         for (x in SAMPLE_XS) {
             for (y in SAMPLE_YS) {
-                val depth = DepthFusionMath.getAverageDepth(x, y, depthImage)
+                val depth = sampler.getAverageDepth(x, y)
                 if (depth in MIN_VALID_DEPTH_MM..MAX_VALID_DEPTH_MM && count < sampleBuffer.size) {
                     sampleBuffer[count++] = depth
                 }

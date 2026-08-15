@@ -13,6 +13,8 @@
 - The official ONNX Runtime pre/post-processing YOLOv8n model is bundled locally and loaded lazily from assets when the user presses `वस्तु खोजें`; Android uses ONNX Runtime plus ONNX Runtime Extensions.
 - ONNX detections are mapped to ARCore depth for approximate distance and clock direction, with Hindi aliases for common COCO classes. The current asset is fixed-vocabulary YOLOv8, not true promptable YOLO-World.
 - ARCore horizontal upward-facing plane tracking now supplies a ground reference to negative-obstacle analysis. Vibration amplitude, TTS throttling, and stereo beep feedback were optimized.
+- Audio alerts now use three preloaded short SoundPool clips with left/right gain panning instead of generating and streaming a fresh PCM buffer for every alert. The previous AudioTrack underrun path is removed.
+- Depth safety now uses one shared per-frame depth sampler and reusable ground-profile arrays. Thermal policy is cached, plane checks are throttled, and motion switching uses hysteresis with a 450 ms moving confirmation and 1.5 s still confirmation. Target FPS changes are applied only when the mode changes.
 
 ## Deliberate boundaries in this milestone
 
