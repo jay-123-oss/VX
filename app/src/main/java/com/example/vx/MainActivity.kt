@@ -42,8 +42,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var lastAppliedFps = -1
     private var previousDistanceMeters: Float? = null
     private var previousDistanceTimeNs: Long = 0L
-    private val detectionTracker = DetectionTracker()
-    private var lastSmartDetectionNs: Long = 0L
     private var lastSafetyLogNs: Long = 0L
     @Volatile private var lastSafetySnapshotNs: Long = 0L
     @Volatile private var watchdogAlerted = false
@@ -76,7 +74,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     messageHindi = "सुरक्षा जांच रुक गई है, कृपया रुकें"
                 )
                 alerts.processSnapshot(caution, 0f)
-                alerts.onSmartFrameUnavailable()
                 overlay.updateSnapshot(caution)
                 statusTextView.text = formatSafetyMessage(caution)
             }
@@ -243,23 +240,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     watchdogAlerted = false
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
-                    var smartDecision: AlertDecision? = null
-                    if (nowNs - lastSmartDetectionNs >= SMART_DETECTION_INTERVAL_NS) {
-                        lastSmartDetectionNs = nowNs
-                        val smartImageBytes = ImageFrameEncoder.toJpeg(
-                            camImage,
-                            maxDimension = SMART_MAX_IMAGE_DIMENSION,
-                            quality = SMART_JPEG_QUALITY
-                        )
-                        val rawDetections = smartImageBytes?.let { objectDetector.detect(it) }.orEmpty()
-                        val trackedDetections = detectionTracker.update(rawDetections, SystemClock.elapsedRealtime())
-                        smartDecision = alerts.processSmartDetections(
-                            detections = trackedDetections,
-                            frameReliable = smartImageBytes != null,
-                            nowMs = SystemClock.elapsedRealtime()
-                        )
-                    }
-
                     val nowMs = SystemClock.elapsedRealtime()
                     val thermalMessage = thermalStatusMessage(thermalPolicy, nowMs)
                     var searchResultMessage: String? = null
@@ -306,8 +286,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                         }
                     }
 
-                    val smartMessage = smartDecision?.let { formatSmartMessage(it) }
-                    postSafetyUi(snapshot, searchResultMessage ?: smartMessage ?: thermalMessage)
+                    postSafetyUi(snapshot, searchResultMessage ?: thermalMessage)
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
@@ -418,8 +397,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         surface.onPause()
         motionManager.stop()
         thermalDutyManager.stop()
-        detectionTracker.reset()
-        lastSmartDetectionNs = 0L
         arManager.pause()
     }
 
@@ -462,16 +439,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
     }
 
-    private fun formatSmartMessage(decision: AlertDecision): String? {
-        val route = when (decision.routeSuggestion) {
-            RouteSuggestion.TURN_LEFT -> "बाईं ओर रास्ता जांचें"
-            RouteSuggestion.TURN_RIGHT -> "दाईं ओर रास्ता जांचें"
-            RouteSuggestion.STOP_AND_SCAN -> "रुकें, सुरक्षित दिशा स्पष्ट नहीं है"
-            null -> null
-        }
-        return route ?: decision.speechHindi
-    }
-
     private fun formatSafetyMessage(snapshot: SafetySnapshot): String {
         val distance = snapshot.distanceMeters?.let { String.format(java.util.Locale.US, "%.1f m", it) }
         return when {
@@ -508,8 +475,5 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         private const val UI_UPDATE_INTERVAL_NS = 150_000_000L
         private const val SAFETY_WATCHDOG_NS = 1_500_000_000L
         private const val SAFETY_WATCHDOG_PERIOD_MS = 500L
-        private const val SMART_DETECTION_INTERVAL_NS = 500_000_000L
-        private const val SMART_MAX_IMAGE_DIMENSION = 640
-        private const val SMART_JPEG_QUALITY = 70
     }
 }
