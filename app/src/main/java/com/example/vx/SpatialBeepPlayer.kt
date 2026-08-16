@@ -14,6 +14,7 @@ class SpatialBeepPlayer(context: Context) {
     private val soundIds = SparseIntArray(3)
     @Volatile private var loadedCount = 0
     @Volatile private var released = false
+    @Volatile private var activeStreamId = 0
 
     init {
         val attributes = AudioAttributes.Builder()
@@ -43,11 +44,20 @@ class SpatialBeepPlayer(context: Context) {
         if (sampleId == 0) return
         val left = leftGain.coerceIn(0f, 1f)
         val right = rightGain.coerceIn(0f, 1f)
-        soundPool.play(sampleId, left, right, 1, 0, 1f)
+        activeStreamId = soundPool.play(sampleId, left, right, 1, 0, 1f)
+    }
+
+    fun stop() {
+        val streamId = activeStreamId
+        if (streamId != 0) {
+            soundPool.stop(streamId)
+            activeStreamId = 0
+        }
     }
 
     fun release() {
         if (released) return
+        stop()
         released = true
         soundPool.release()
     }
