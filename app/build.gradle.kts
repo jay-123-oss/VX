@@ -81,7 +81,6 @@ dependencies {
     // TensorFlow Lite
     implementation(libs.litert)
     implementation(libs.litert.gpu)
-    implementation(libs.litert.support)
 
     // ARCore
     implementation(libs.google.arcore)
@@ -97,6 +96,14 @@ dependencies {
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)
+}
+
+// ObjectDetectorHelper only needs the Interpreter and GPU delegate. The support libraries are
+// not used by this module and currently publish overlapping org.tensorflow.lite.support namespaces.
+configurations.configureEach {
+    exclude(group = "com.google.ai.edge.litert", module = "litert-support")
+    exclude(group = "com.google.ai.edge.litert", module = "litert-support-api")
+    exclude(group = "org.tensorflow", module = "tensorflow-lite-support")
 }
 
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {

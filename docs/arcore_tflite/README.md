@@ -10,7 +10,7 @@ The VX app now contains an offline-first ARCore and TensorFlow Lite pipeline. `A
 
 ## Gradle dependencies
 
-The module now enables Jetpack Compose and adds the following dependency groups through the version catalog: Compose BOM, `activity-compose`, Compose UI, Material 3, TensorFlow Lite runtime, TensorFlow Lite GPU delegate, and TensorFlow Lite support. Existing ARCore, ONNX Runtime, coroutines, and LiteRT-LM dependencies are retained.
+The module now enables Jetpack Compose and adds the following dependency groups through the version catalog: Compose BOM, `activity-compose`, Compose UI, Material 3, TensorFlow Lite runtime, TensorFlow Lite GPU delegate, and LiteRT-LM. The unused support-library dependency has been removed, and Gradle excludes the overlapping `litert-support` and `litert-support-api` artifacts that caused the manifest namespace collision. Existing ARCore, ONNX Runtime, and coroutines dependencies are retained.
 
 ## Runtime behavior
 

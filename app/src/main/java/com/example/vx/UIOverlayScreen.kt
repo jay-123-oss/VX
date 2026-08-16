@@ -26,6 +26,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import java.util.Locale
 
 /** State exposed by the live AR/TFLite frame loop to the Compose dashboard. */
@@ -137,7 +138,7 @@ private fun DetectionCanvas(
                 canvas.nativeCanvas.drawText(
                     "${box.label} - $distanceText",
                     left,
-                    (top - with(density) { 6.dp.toPx() }).coerceAtLeast(textSize),
+                    (top - with(density) { 6.dp.toPx() }).coerceAtLeast(paint.textSize),
                     paint
                 )
             }

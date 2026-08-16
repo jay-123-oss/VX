@@ -80,9 +80,15 @@ class ObjectDetectorHelper(
                 reader.readLines().map(String::trim).filter(String::isNotEmpty)
             }
         }.getOrDefault(emptyList())
-        val model = runCatching { context.assets.open(modelAssetPath).use { it.readBytes() } }
+        val modelBytes = runCatching { context.assets.open(modelAssetPath).use { it.readBytes() } }
             .onFailure { Log.w(TAG, "TFLite model asset unavailable: $modelAssetPath") }
             .getOrNull() ?: return null
+        val model = ByteBuffer.allocateDirect(modelBytes.size)
+            .order(ByteOrder.nativeOrder())
+            .apply {
+                put(modelBytes)
+                rewind()
+            }
 
         var options = Interpreter.Options().apply {
             setNumThreads(2)
@@ -96,7 +102,7 @@ class ObjectDetectorHelper(
                         addDelegate(delegate)
                         setNumThreads(2)
                     }
-                    interpreter = Interpreter(model, options)
+                    interpreter = Interpreter(model.duplicate().order(ByteOrder.nativeOrder()), options)
                     acceleration = Acceleration.GPU
                 }
             }.onFailure { error ->
@@ -107,7 +113,7 @@ class ObjectDetectorHelper(
         }
         if (interpreter == null) {
             runCatching {
-                interpreter = Interpreter(model, options)
+                interpreter = Interpreter(model.duplicate().order(ByteOrder.nativeOrder()), options)
                 acceleration = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     Acceleration.NNAPI
                 } else {
@@ -120,7 +126,7 @@ class ObjectDetectorHelper(
         }
         if (interpreter == null) {
             runCatching {
-                interpreter = Interpreter(model, Interpreter.Options().setNumThreads(2))
+                interpreter = Interpreter(model.duplicate().order(ByteOrder.nativeOrder()), Interpreter.Options().setNumThreads(2))
                 acceleration = Acceleration.CPU
             }.onFailure { error ->
                 Log.e(TAG, "CPU TFLite interpreter unavailable", error)
@@ -234,7 +240,7 @@ class ObjectDetectorHelper(
 
     private fun nonMaximumSuppression(input: List<Detection>): List<Detection> = input
         .sortedByDescending { it.confidence }
-        .fold(mutableListOf()) { kept, candidate ->
+        .fold(mutableListOf<Detection>()) { kept: MutableList<Detection>, candidate: Detection ->
             if (kept.none { iou(it, candidate) > iouThreshold || it.classId != candidate.classId }) kept += candidate
             kept
         }
