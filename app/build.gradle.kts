@@ -1,6 +1,7 @@
 
 plugins {
     id("com.android.application")
+    alias(libs.plugins.compose)
 }
 
 android {
@@ -49,6 +50,7 @@ android {
     }
     buildFeatures {
         viewBinding = true
+        compose = true
     }
 
     androidResources {
@@ -69,6 +71,17 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.activity.ktx)
+    implementation(platform(libs.androidx.compose.bom))
+    implementation(libs.androidx.activity.compose)
+    implementation(libs.androidx.compose.ui)
+    implementation(libs.androidx.compose.ui.graphics)
+    implementation(libs.androidx.compose.ui.tooling.preview)
+    implementation(libs.androidx.compose.material3)
+
+    // TensorFlow Lite
+    implementation(libs.litert)
+    implementation(libs.litert.gpu)
+    implementation(libs.litert.support)
 
     // ARCore
     implementation(libs.google.arcore)

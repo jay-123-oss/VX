@@ -38,6 +38,7 @@ class ARCoreVisionManager(private val context: Context) {
         return runCatching {
             Session(context).also { created ->
                 val config = Config(created)
+                config.focusMode = Config.FocusMode.AUTO
                 if (created.isDepthModeSupported(Config.DepthMode.AUTOMATIC)) {
                     config.depthMode = Config.DepthMode.AUTOMATIC
                     Log.i("ARCoreVision", "Depth mode enabled")

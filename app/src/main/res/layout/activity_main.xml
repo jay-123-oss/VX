@@ -12,7 +12,13 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent" />
 
-    <!-- Object Detection Overlay -->
+    <!-- Compose AR/TFLite dashboard overlay -->
+    <androidx.compose.ui.platform.ComposeView
+        android:id="@+id/composeOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Existing safety overlay -->
     <com.example.vx.OverlayView
         android:id="@+id/overlayView"
         android:layout_width="match_parent"

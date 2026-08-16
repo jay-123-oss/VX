@@ -1,0 +1,3 @@
+# ARCore implementation notes
+
+The Google ARCore `Frame` API exposes `transformCoordinates2d(Coordinates2d, float[], Coordinates2d, float[])`, and `Coordinates2d.OPENGL_NORMALIZED_DEVICE_COORDINATES` can be transformed into `Coordinates2d.TEXTURE_NORMALIZED` for an external OES camera texture. The API also documents `acquireDepthImage16Bits()` as the preferred 16-bit depth acquisition method. Sources: [ARCore Frame reference](https://developers.google.com/ar/reference/java/com/google/ar/core/Frame) and [Coordinates2d reference](https://developers.google.com/ar/reference/java/com/google/ar/core/Coordinates2d).

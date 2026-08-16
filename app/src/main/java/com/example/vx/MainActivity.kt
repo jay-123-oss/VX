@@ -2,6 +2,9 @@ package com.example.vx
 
 import android.Manifest
 import android.content.pm.PackageManager
+import android.content.Intent
+import android.content.IntentFilter
+import android.graphics.BitmapFactory
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Bundle
@@ -11,12 +14,19 @@ import android.os.SystemClock
 import android.util.Log
 import com.google.ar.core.TrackingState
 import androidx.appcompat.app.AppCompatActivity
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
+import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.content.ContextCompat
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import kotlin.math.roundToInt
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
@@ -36,6 +46,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private lateinit var negativeObstacleDetectors: Array<NegativeObstacleDetector>
     private lateinit var thermalDutyManager: ThermalDutyManager
     private lateinit var storytellerEngine: StorytellerEngine
+    private lateinit var tfliteDetector: ObjectDetectorHelper
+    private lateinit var spatialFusionEngine: SpatialFusionEngine
+    private lateinit var alertController: AlertController
+    private lateinit var backgroundRenderer: CameraBackgroundRenderer
+    private var lastTfliteRunMs = 0L
+    private var lastFrameTimeNs = 0L
+    private var frameCounter = 0
+    private var dashboardState by mutableStateOf(OverlayDashboardState())
     private val safetyCorridorXs = floatArrayOf(0.35f, 0.50f, 0.65f)
     private val groundProfileYs = floatArrayOf(0.64f, 0.74f, 0.84f, 0.94f)
     private val groundProfileBuffers = Array(safetyCorridorXs.size) { IntArray(groundProfileYs.size) }
@@ -125,6 +143,14 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         surface = findViewById(R.id.surfaceview)
         overlay = findViewById(R.id.overlayView)
         statusTextView = findViewById(R.id.statusTextView)
+        findViewById<ComposeView>(R.id.composeOverlay).apply {
+            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+            setContent {
+                MaterialTheme {
+                    UIOverlayScreen(state = dashboardState)
+                }
+            }
+        }
 
         safetyEngine = SafetyDecisionEngine()
         corridorAnalyzer = DepthCorridorAnalyzer()
@@ -137,6 +163,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
         arManager = ARCoreVisionManager(this)
         objectDetector = OnnxObjectDetector(this)
+        tfliteDetector = ObjectDetectorHelper(this)
+        spatialFusionEngine = SpatialFusionEngine()
+        alertController = AlertController(this)
+        backgroundRenderer = CameraBackgroundRenderer()
         storytellerEngine = UnavailableStorytellerEngine()
         alerts = AlertEngine(this)
 
@@ -179,6 +209,23 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
             Log.e("MainActivity", "ARCore frame update failed", error)
             return
         }
+        backgroundRenderer.draw(frame)
+        val frameNowNs = System.nanoTime()
+        frameCounter++
+        val measuredFps = if (lastFrameTimeNs > 0L) {
+            val elapsed = (frameNowNs - lastFrameTimeNs) / 1_000_000_000f
+            if (elapsed >= 1f) {
+                val fps = frameCounter / elapsed
+                frameCounter = 0
+                lastFrameTimeNs = frameNowNs
+                fps
+            } else {
+                dashboardState.fps
+            }
+        } else {
+            lastFrameTimeNs = frameNowNs
+            dashboardState.fps
+        }
 
         val planeAssessment = planeGroundAnalyzer.assess(frame)
         val thermalPolicy = thermalDutyManager.policy()
@@ -192,6 +239,15 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
 
         if (frame.camera.trackingState != TrackingState.TRACKING) {
+            postDashboardState(
+                state = dashboardState.copy(
+                    detections = emptyList(),
+                    highestZone = ThreatZone.CAUTION,
+                    fps = measuredFps,
+                    tracking = false,
+                    acceleration = tfliteDetector.acceleration.name
+                )
+            )
             runOnUiThread {
                 val unknown = SafetySnapshot(
                     state = SafetyState.CAUTION,
@@ -282,6 +338,30 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     }
 
                     val nowMs = SystemClock.elapsedRealtime()
+                    var fusedDetections = dashboardState.detections
+                    if (nowMs - lastTfliteRunMs >= TFLITE_INTERVAL_MS && tfliteDetector.isReady()) {
+                        lastTfliteRunMs = nowMs
+                        val jpeg = ImageFrameEncoder.toJpeg(camImage, maxDimension = 640, quality = 80)
+                        val bitmap = jpeg?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+                        if (bitmap != null) {
+                            val detections = tfliteDetector.detect(bitmap)
+                            bitmap.recycle()
+                            fusedDetections = spatialFusionEngine.fuse(detections, depthSampler, nowMs)
+                            fusedDetections.filter { it.trigger }.forEach(alertController::handle)
+                        }
+                    }
+                    postDashboardState(
+                        state = dashboardState.copy(
+                            detections = fusedDetections,
+                            highestZone = spatialFusionEngine.highestZone(fusedDetections),
+                            fps = measuredFps,
+                            tracking = true,
+                            acceleration = tfliteDetector.acceleration.name,
+                            batteryPercent = batteryPercent(),
+                            cpuPercent = cpuPercent()
+                        )
+                    )
+
                     val thermalMessage = thermalStatusMessage(thermalPolicy, nowMs)
                     var searchResultMessage: String? = null
                     if (searchRequested) {
@@ -343,9 +423,7 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
         GLES20.glClearColor(0f, 0f, 0f, 1f)
-        val textures = IntArray(1)
-        GLES20.glGenTextures(1, textures, 0)
-        arManager.setCameraTextureName(textures[0])
+        arManager.setCameraTextureName(backgroundRenderer.createOnGlThread())
     }
 
     override fun onSurfaceChanged(gl: GL10?, w: Int, h: Int) {
@@ -567,6 +645,22 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
     }
 
+    private fun postDashboardState(state: OverlayDashboardState) {
+        runOnUiThread { dashboardState = state }
+    }
+
+    private fun batteryPercent(): Int {
+        val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = intent?.getIntExtra("level", -1) ?: -1
+        val scale = intent?.getIntExtra("scale", 100) ?: 100
+        return if (level >= 0 && scale > 0) ((level * 100f) / scale).roundToInt() else 0
+    }
+
+    private fun cpuPercent(): Float = runCatching {
+        val load = java.io.File("/proc/loadavg").readText().trim().substringBefore(' ').toFloat()
+        (load * 100f / Runtime.getRuntime().availableProcessors().coerceAtLeast(1)).coerceIn(0f, 100f)
+    }.getOrDefault(0f)
+
     override fun onDestroy() {
         super.onDestroy()
         renderLoopRunning = false
@@ -579,8 +673,12 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         searchInferenceBusy = false
         arManager.shutdown()
         objectDetector.close()
+        tfliteDetector.close()
+        spatialFusionEngine.reset()
+        alertController.release()
         storytellerEngine.close()
         alerts.release()
+        runCatching { surface.queueEvent { backgroundRenderer.destroy() } }
     }
 
     private fun toHindiObjectLabel(label: String): String = HindiObjectLabels.labelFor(label)
@@ -601,5 +699,6 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         private const val SMART_DETECTION_INTERVAL_NS = 500_000_000L
         private const val SMART_MAX_IMAGE_DIMENSION = 640
         private const val SMART_JPEG_QUALITY = 70
+        private const val TFLITE_INTERVAL_MS = 350L
     }
 }
