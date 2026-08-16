@@ -147,8 +147,24 @@ class OnnxObjectDetector(
                 Collections.singletonMap("image", input),
                 setOf("scaled_box_out_next")
             ).use { result ->
-                @Suppress("UNCHECKED_CAST")
-                return result.get(0).value as? Array<FloatArray> ?: emptyArray()
+                val value = result.get(0).value
+                val rows = when (value) {
+                    is Array<*> -> value.mapNotNull { it as? FloatArray }.toTypedArray()
+                    is FloatArray -> value
+                        .asList()
+                        .chunked(OUTPUT_COLUMNS)
+                        .filter { it.size == OUTPUT_COLUMNS }
+                        .map { it.toFloatArray() }
+                        .toTypedArray()
+                    else -> emptyArray()
+                }
+                val invalidRows = rows.count { it.size != OUTPUT_COLUMNS }
+                if (invalidRows > 0) {
+                    Log.e(TAG, "Unexpected detection output rows=${rows.size} invalidRows=$invalidRows expectedColumns=$OUTPUT_COLUMNS")
+                    return emptyArray()
+                }
+                Log.d(TAG, "Detection output rows=${rows.size} columns=$OUTPUT_COLUMNS")
+                return rows
             }
         }
     }
@@ -257,5 +273,7 @@ class OnnxObjectDetector(
         private const val LABEL_ASSET = "models/coco_classes.txt"
         private const val CONFIDENCE_THRESHOLD = 0.35f
         private const val MAX_RESULTS = 8
+        // The bundled asset is patched so its built-in NMS emits [N, 6]: cx, cy, w, h, score, class.
+        private const val OUTPUT_COLUMNS = 6
     }
 }

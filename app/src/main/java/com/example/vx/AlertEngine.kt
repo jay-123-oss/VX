@@ -41,6 +41,7 @@ class AlertEngine(context: Context) {
     }
 
     /** Existing depth/plane safety path. Unknown input never becomes SAFE. */
+    @Synchronized
     fun processSnapshot(snapshot: SafetySnapshot, xPos: Float) {
         val now = System.currentTimeMillis()
         val stateChanged = snapshot.state != lastSafetyState
@@ -84,6 +85,7 @@ class AlertEngine(context: Context) {
     }
 
     /** Sends tracked detections through the event-driven FSM and applies only the effective action. */
+    @Synchronized
     fun processSmartDetections(
         detections: List<TrackedDetection>,
         frameReliable: Boolean = true,
@@ -94,6 +96,7 @@ class AlertEngine(context: Context) {
         return latestSmartDecision
     }
 
+    @Synchronized
     fun onSmartFrameUnavailable(nowMs: Long = System.currentTimeMillis()): AlertDecision {
         latestSmartDecision = smartEngine.onFrameUnavailable(nowMs)
         applyEffective(0f, nowMs)

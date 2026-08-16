@@ -44,6 +44,8 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     private var previousDistanceTimeNs: Long = 0L
     private val detectionTracker = DetectionTracker()
     private var lastSmartDetectionNs: Long = 0L
+    @Volatile private var smartInferenceBusy = false
+    private val objectDetectorLock = Any()
     private var lastSafetyLogNs: Long = 0L
     @Volatile private var lastSafetySnapshotNs: Long = 0L
     @Volatile private var watchdogAlerted = false
@@ -87,6 +89,25 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
     @Volatile private var lastSearchRunMs = 0L
     @Volatile private var thermalCooldownUntilMs = 0L
     @Volatile private var lastThermalStatus = Int.MIN_VALUE
+    private val smartInferenceExecutor: ExecutorService = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(1),
+        { runnable -> Thread(runnable, "vx-inference").apply { priority = Thread.NORM_PRIORITY - 2 } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
+    private val searchInferenceExecutor: ExecutorService = ThreadPoolExecutor(
+        1,
+        1,
+        0L,
+        TimeUnit.MILLISECONDS,
+        ArrayBlockingQueue(1),
+        { runnable -> Thread(runnable, "vx-search-inference").apply { priority = Thread.NORM_PRIORITY - 3 } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
+    @Volatile private var searchInferenceBusy = false
     private val perceptionExecutor: ExecutorService = ThreadPoolExecutor(
         1,
         1,
@@ -243,21 +264,21 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                     watchdogAlerted = false
                     alerts.processSnapshot(snapshot, (normX * 2) - 1.0f)
 
-                    var smartDecision: AlertDecision? = null
-                    if (nowNs - lastSmartDetectionNs >= SMART_DETECTION_INTERVAL_NS) {
+                    if (
+                        nowNs - lastSmartDetectionNs >= SMART_DETECTION_INTERVAL_NS &&
+                        !smartInferenceBusy
+                    ) {
                         lastSmartDetectionNs = nowNs
                         val smartImageBytes = ImageFrameEncoder.toJpeg(
                             camImage,
                             maxDimension = SMART_MAX_IMAGE_DIMENSION,
                             quality = SMART_JPEG_QUALITY
                         )
-                        val rawDetections = smartImageBytes?.let { objectDetector.detect(it) }.orEmpty()
-                        val trackedDetections = detectionTracker.update(rawDetections, SystemClock.elapsedRealtime())
-                        smartDecision = alerts.processSmartDetections(
-                            detections = trackedDetections,
-                            frameReliable = smartImageBytes != null,
-                            nowMs = SystemClock.elapsedRealtime()
-                        )
+                        if (smartImageBytes != null) {
+                            submitSmartInference(smartImageBytes)
+                        } else {
+                            alerts.onSmartFrameUnavailable()
+                        }
                     }
 
                     val nowMs = SystemClock.elapsedRealtime()
@@ -287,27 +308,17 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
                                 maxDimension = profile.maxImageDimension,
                                 quality = profile.jpegQuality
                             )
-                            val detections = imageBytes?.let { objectDetector.detect(it) }.orEmpty()
-                            val best = detections.maxByOrNull { it.confidence }
-                            val searchMessage = if (best == null) {
-                                "वस्तु नहीं मिली"
+                            if (imageBytes == null) {
+                                searchResultMessage = "कैमरा फ्रेम उपलब्ध नहीं है"
+                                alerts.speakSearch(searchResultMessage!!)
                             } else {
-                                val objectDistanceMm = depthSampler?.getAverageDepth(best.centerX, best.centerY) ?: 0
-                                val distanceText = if (objectDistanceMm > 0) {
-                                    String.format(java.util.Locale.US, "%.1f मीटर", objectDistanceMm / 1000f)
-                                } else {
-                                    "दूरी स्पष्ट नहीं"
-                                }
-                                "${toHindiObjectLabel(best.label)} ${clockDirection(best.centerX)}, $distanceText"
+                                submitSearchInference(imageBytes, profile)
+                                searchResultMessage = "${profile.messageHindi} शुरू हो गई"
                             }
-                            alerts.speakSearch(searchMessage)
-                            searchResultMessage = "${profile.messageHindi}: $searchMessage"
-                            Log.i("OnnxObjectDetector", "Search profile=${profile.name} maxDimension=${profile.maxImageDimension} jpegQuality=${profile.jpegQuality}")
                         }
                     }
 
-                    val smartMessage = smartDecision?.let { formatSmartMessage(it) }
-                    postSafetyUi(snapshot, searchResultMessage ?: smartMessage ?: thermalMessage)
+                    postSafetyUi(snapshot, searchResultMessage ?: thermalMessage)
                     if (nowNs - lastSafetyLogNs > 1_000_000_000L) {
                         Log.i(
                             "ReflexShield",
@@ -462,6 +473,81 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         }
     }
 
+    private fun submitSmartInference(imageBytes: ByteArray) {
+        if (smartInferenceBusy || searchInferenceBusy) return
+        smartInferenceBusy = true
+        try {
+            smartInferenceExecutor.execute {
+                val startedNs = SystemClock.elapsedRealtimeNanos()
+                try {
+                    val rawDetections = synchronized(objectDetectorLock) {
+                        objectDetector.detect(imageBytes)
+                    }
+                    val nowMs = SystemClock.elapsedRealtime()
+                    val trackedDetections = detectionTracker.update(rawDetections, nowMs)
+                    val decision = alerts.processSmartDetections(
+                        detections = trackedDetections,
+                        frameReliable = true,
+                        nowMs = nowMs
+                    )
+                    val elapsedMs = (SystemClock.elapsedRealtimeNanos() - startedNs) / 1_000_000.0
+                    Log.i(
+                        "OnnxObjectDetector",
+                        "Smart inference completed latencyMs=${"%.1f".format(elapsedMs)} detections=${rawDetections.size} level=${decision.level}"
+                    )
+                    formatSmartMessage(decision)?.let { message ->
+                        runOnUiThread { statusTextView.text = message }
+                    }
+                } catch (error: Throwable) {
+                    Log.e("OnnxObjectDetector", "Smart inference unavailable; depth safety remains active", error)
+                    alerts.onSmartFrameUnavailable()
+                } finally {
+                    smartInferenceBusy = false
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            smartInferenceBusy = false
+            alerts.onSmartFrameUnavailable()
+        }
+    }
+
+    private fun submitSearchInference(imageBytes: ByteArray, profile: OnnxSearchProfile) {
+        if (searchInferenceBusy || smartInferenceBusy) {
+            alerts.speakSearch("सुरक्षा जांच व्यस्त है, वस्तु खोज बाद में होगी")
+            return
+        }
+        searchInferenceBusy = true
+        try {
+            searchInferenceExecutor.execute {
+                try {
+                    val detections = synchronized(objectDetectorLock) {
+                        objectDetector.detect(imageBytes)
+                    }
+                    val best = detections.maxByOrNull { it.confidence }
+                    val searchMessage = if (best == null) {
+                        "वस्तु नहीं मिली"
+                    } else {
+                        "${toHindiObjectLabel(best.label)} ${clockDirection(best.centerX)}, दूरी स्पष्ट नहीं"
+                    }
+                    alerts.speakSearch(searchMessage)
+                    runOnUiThread { statusTextView.text = "${profile.messageHindi}: $searchMessage" }
+                    Log.i(
+                        "OnnxObjectDetector",
+                        "Search completed profile=${profile.name} detections=${detections.size}"
+                    )
+                } catch (error: Throwable) {
+                    Log.e("OnnxObjectDetector", "Search inference failed; safety path unaffected", error)
+                    alerts.speakSearch("वस्तु खोज उपलब्ध नहीं है")
+                } finally {
+                    searchInferenceBusy = false
+                }
+            }
+        } catch (_: RejectedExecutionException) {
+            searchInferenceBusy = false
+            alerts.speakSearch("वस्तु खोज अभी व्यस्त है")
+        }
+    }
+
     private fun formatSmartMessage(decision: AlertDecision): String? {
         val route = when (decision.routeSuggestion) {
             RouteSuggestion.TURN_LEFT -> "बाईं ओर रास्ता जांचें"
@@ -487,6 +573,10 @@ class MainActivity : AppCompatActivity(), GLSurfaceView.Renderer {
         renderHandler.removeCallbacks(renderRunnable)
         renderHandler.removeCallbacks(safetyWatchdogRunnable)
         perceptionExecutor.shutdownNow()
+        smartInferenceExecutor.shutdownNow()
+        searchInferenceExecutor.shutdownNow()
+        smartInferenceBusy = false
+        searchInferenceBusy = false
         arManager.shutdown()
         objectDetector.close()
         storytellerEngine.close()
